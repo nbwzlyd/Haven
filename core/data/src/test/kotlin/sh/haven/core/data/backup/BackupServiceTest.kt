@@ -605,4 +605,216 @@ class BackupServiceTest {
         method.isAccessible = true
         return method.invoke(service, plaintext, password) as ByteArray
     }
+
+    // -- Cross-device round-trip (#145) --
+    //
+    // The exporting and importing services share nothing — fresh DAO mocks,
+    // fresh DataStore — so anything device-specific in the encryption envelope
+    // (e.g. accidental reliance on shared in-memory salts, KeyStore handles,
+    // PRNG seeding) shows up as a decrypt failure here. The pre-existing
+    // tests above all reuse the same `service` for both sides which makes
+    // them blind to this class of bug.
+
+    /**
+     * Build a second BackupService backed by entirely separate mocks +
+     * DataStore. Mirrors what happens when a user installs Haven on a new
+     * device and imports a .enc file from their old device.
+     */
+    private fun newImporterService(): BackupServicePair {
+        val cd = mockk<ConnectionDao>(relaxed = true)
+        val cr = mockk<sh.haven.core.data.repository.ConnectionRepository>(relaxed = true)
+        val cgd = mockk<sh.haven.core.data.db.ConnectionGroupDao>(relaxed = true)
+        val skd = mockk<SshKeyDao>(relaxed = true)
+        val skr = mockk<sh.haven.core.data.repository.SshKeyRepository>(relaxed = true)
+        val khd = mockk<KnownHostDao>(relaxed = true)
+        val pfd = mockk<PortForwardRuleDao>(relaxed = true)
+        val tcr = mockk<TunnelConfigRepository>(relaxed = true)
+        coEvery { tcr.getAllDecrypted() } returns emptyList()
+        val ds = PreferenceDataStoreFactory.create {
+            File(tempFolder.root, "importer-${System.nanoTime()}.preferences_pb")
+        }
+        return BackupServicePair(
+            service = BackupService(cd, cr, cgd, skd, skr, khd, pfd, tcr, ds),
+            connectionRepository = cr,
+            sshKeyRepository = skr,
+            knownHostDao = khd,
+            portForwardRuleDao = pfd,
+            tunnelConfigRepository = tcr,
+        )
+    }
+
+    private data class BackupServicePair(
+        val service: BackupService,
+        val connectionRepository: sh.haven.core.data.repository.ConnectionRepository,
+        val sshKeyRepository: sh.haven.core.data.repository.SshKeyRepository,
+        val knownHostDao: KnownHostDao,
+        val portForwardRuleDao: PortForwardRuleDao,
+        val tunnelConfigRepository: TunnelConfigRepository,
+    )
+
+    @Test
+    fun `cross-device roundtrip preserves all entity types`() = runTest {
+        val connections = listOf(
+            ConnectionProfile(id = "c1", label = "A", host = "h", username = "u"),
+            ConnectionProfile(id = "c2", label = "B", host = "h2", username = "u2",
+                authType = ConnectionProfile.AuthType.KEY, keyId = "k1"),
+        )
+        val keys = listOf(
+            SshKey(id = "k1", label = "K", keyType = "ED25519",
+                privateKeyBytes = byteArrayOf(1, 2, 3),
+                publicKeyOpenSsh = "ssh-ed25519 AAA", fingerprintSha256 = "SHA256:x"),
+        )
+        val hosts = listOf(
+            KnownHost(hostname = "a.com", port = 22, keyType = "ssh-rsa",
+                publicKeyBase64 = "AAA", fingerprint = "SHA256:y"),
+        )
+        val tunnels = listOf(
+            TunnelConfig(id = "tun-1", label = "WG", type = "WIREGUARD",
+                configText = "[Interface]\n".toByteArray(), createdAt = 1700000000000L),
+        )
+
+        // -- Device A (the exporting one): the test fixture's `service`. --
+        coEvery { connectionRepository.getAll() } returns connections
+        coEvery { sshKeyDao.getAll() } returns keys
+        coEvery { sshKeyRepository.getAllDecrypted() } returns keys
+        coEvery { knownHostDao.getAll() } returns hosts
+        coEvery { portForwardRuleDao.getAll() } returns emptyList()
+        coEvery { tunnelConfigRepository.getAllDecrypted() } returns tunnels
+        val encrypted = service.export("user-password-123")
+
+        // -- Device B (a fresh install): brand-new mocks, brand-new DataStore. --
+        val b = newImporterService()
+        val savedProfiles = mutableListOf<ConnectionProfile>()
+        val savedKeys = mutableListOf<SshKey>()
+        val savedHosts = mutableListOf<KnownHost>()
+        val savedTunnels = mutableListOf<TunnelConfig>()
+        coEvery { b.connectionRepository.save(any()) } answers {
+            savedProfiles += firstArg<ConnectionProfile>()
+            Unit
+        }
+        coEvery { b.sshKeyRepository.save(any()) } answers {
+            savedKeys += firstArg<SshKey>()
+            Unit
+        }
+        coEvery { b.knownHostDao.upsert(any()) } answers {
+            savedHosts += firstArg<KnownHost>()
+            Unit
+        }
+        coEvery { b.tunnelConfigRepository.save(any()) } answers {
+            savedTunnels += firstArg<TunnelConfig>()
+            Unit
+        }
+
+        val result = b.service.import(encrypted, "user-password-123")
+        assertTrue("Import errors: ${result.errors}", result.errors.isEmpty())
+
+        // 2 profiles + 1 key + 1 host + 1 tunnel = 5 (settings don't count
+        // toward the total — they're a single block, not per-row).
+        assertEquals(5, result.count)
+        assertEquals(2, savedProfiles.size)
+        assertEquals(setOf("c1", "c2"), savedProfiles.map { it.id }.toSet())
+        assertEquals(1, savedKeys.size)
+        assertEquals("k1", savedKeys.first().id)
+        assertArrayEquals(byteArrayOf(1, 2, 3), savedKeys.first().privateKeyBytes)
+        assertEquals(1, savedHosts.size)
+        assertEquals("a.com", savedHosts.first().hostname)
+        assertEquals(1, savedTunnels.size)
+        assertEquals("tun-1", savedTunnels.first().id)
+    }
+
+    @Test
+    fun `cross-device wrong password fails with AEAD tag exception`() = runTest {
+        coEvery { connectionRepository.getAll() } returns emptyList()
+        coEvery { sshKeyDao.getAll() } returns emptyList()
+        coEvery { sshKeyRepository.getAllDecrypted() } returns emptyList()
+        coEvery { knownHostDao.getAll() } returns emptyList()
+        coEvery { portForwardRuleDao.getAll() } returns emptyList()
+        val encrypted = service.export("right")
+
+        val b = newImporterService()
+        val thrown = runCatching { b.service.import(encrypted, "wrong") }.exceptionOrNull()
+        assertTrue(
+            "Expected AEADBadTagException, got ${thrown?.javaClass}",
+            thrown is javax.crypto.AEADBadTagException,
+        )
+    }
+
+    // -- Error-discriminating tests (#145) --
+    //
+    // Every failure path must throw with a non-null, intelligible message so
+    // that SettingsViewModel.importBackup surfaces something useful instead
+    // of falling through to the bare "Import failed" string. Each case below
+    // documents one wire-format corruption and asserts the user-facing text.
+
+    @Test
+    fun `truncated file (shorter than envelope header) reports a clear error`() = runTest {
+        val tooShort = ByteArray(8) // smaller than MAGIC + salt + iv
+        val thrown = runCatching { service.import(tooShort, "pw") }.exceptionOrNull()
+        assertTrue(
+            "Expected an exception with a non-null message, got $thrown",
+            thrown != null && !thrown.message.isNullOrBlank(),
+        )
+    }
+
+    @Test
+    fun `bad MAGIC reports 'Not a Haven backup file'`() = runTest {
+        // Pad to envelope size so we get past length checks before the
+        // MAGIC compare — proves the magic-mismatch path is the one that
+        // fires (not a generic IndexOutOfBounds).
+        val notHaven = ("BOGUS_HEADER_____").toByteArray() + ByteArray(64)
+        val thrown = runCatching { service.import(notHaven, "pw") }.exceptionOrNull()
+        assertTrue(thrown is IllegalArgumentException)
+        assertEquals("Not a Haven backup file", thrown!!.message)
+    }
+
+    @Test
+    fun `single-byte ciphertext flip surfaces as AEAD tag exception`() = runTest {
+        coEvery { connectionRepository.getAll() } returns emptyList()
+        coEvery { sshKeyDao.getAll() } returns emptyList()
+        coEvery { sshKeyRepository.getAllDecrypted() } returns emptyList()
+        coEvery { knownHostDao.getAll() } returns emptyList()
+        coEvery { portForwardRuleDao.getAll() } returns emptyList()
+        val encrypted = service.export("pw").copyOf()
+        // Flip a byte well inside the ciphertext (past MAGIC + salt + iv).
+        encrypted[encrypted.size - 5] = (encrypted[encrypted.size - 5].toInt() xor 0xFF).toByte()
+
+        val thrown = runCatching { service.import(encrypted, "pw") }.exceptionOrNull()
+        assertTrue(
+            "Expected AEADBadTagException, got ${thrown?.javaClass}",
+            thrown is javax.crypto.AEADBadTagException,
+        )
+    }
+
+    @Test
+    fun `future schema version returns clear error rather than crashing`() = runTest {
+        val json = JSONObject().apply {
+            put("version", 999) // way beyond BACKUP_VERSION
+            put("created", System.currentTimeMillis())
+            put("connections", org.json.JSONArray())
+            put("keys", org.json.JSONArray())
+            put("knownHosts", org.json.JSONArray())
+            put("portForwards", org.json.JSONArray())
+            put("settings", JSONObject())
+        }
+        val encrypted = encryptForTest(json.toString().toByteArray(Charsets.UTF_8), "pw")
+
+        val result = service.import(encrypted, "pw")
+        assertEquals(0, result.count)
+        assertEquals(1, result.errors.size)
+        assertTrue(
+            "Expected mention of newer version, got: ${result.errors.first()}",
+            result.errors.first().contains("999") &&
+                result.errors.first().contains("newer"),
+        )
+    }
+
+    @Test
+    fun `non-JSON plaintext after decrypt reports parse error`() = runTest {
+        val encrypted = encryptForTest("this is not JSON".toByteArray(), "pw")
+        val thrown = runCatching { service.import(encrypted, "pw") }.exceptionOrNull()
+        assertTrue(
+            "Expected JSONException-shaped failure with a message, got $thrown",
+            thrown != null && !thrown.message.isNullOrBlank(),
+        )
+    }
 }

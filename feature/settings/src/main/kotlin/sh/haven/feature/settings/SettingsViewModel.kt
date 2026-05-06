@@ -143,7 +143,14 @@ class SettingsViewModel @Inject constructor(
             } catch (e: javax.crypto.AEADBadTagException) {
                 _backupStatus.value = BackupStatus.Error("Wrong password")
             } catch (e: Exception) {
-                _backupStatus.value = BackupStatus.Error(e.message ?: "Import failed")
+                // Some Android exceptions (storage URI revocations, security
+                // exceptions, certain native cipher failures) come through
+                // with a null message. Don't swallow them as a bare "Import
+                // failed" — surface the exception class as a fallback so a
+                // bug report (e.g. #145) carries enough to localise the
+                // failure mode without round-tripping through the user.
+                val detail = e.message ?: "${e.javaClass.simpleName} (no message)"
+                _backupStatus.value = BackupStatus.Error("Import failed: $detail")
             }
         }
     }
