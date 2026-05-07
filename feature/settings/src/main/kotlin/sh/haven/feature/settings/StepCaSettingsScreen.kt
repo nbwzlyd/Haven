@@ -1,0 +1,473 @@
+package sh.haven.feature.settings
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NetworkCheck
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.hilt.navigation.compose.hiltViewModel
+import sh.haven.core.data.db.entities.StepCaConfig
+import sh.haven.core.stepca.StepCaApiClient
+
+/**
+ * Top-level Settings → Certificate Authorities screen. Lists every
+ * registered step-ca instance and lets the user add / edit / delete /
+ * test each one. Phase 2a of #133 — generation lives on the Keys screen.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StepCaSettingsScreen(
+    onBack: () -> Unit,
+    viewModel: StepCaSettingsViewModel = hiltViewModel(),
+) {
+    val configs by viewModel.configs.collectAsState()
+    val testResults by viewModel.testResults.collectAsState()
+    val testInFlight by viewModel.testInFlight.collectAsState()
+
+    var editing by remember { mutableStateOf<StepCaConfig?>(null) }
+    var addOpen by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<StepCaConfig?>(null) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(stringResource(R.string.stepca_screen_title)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.stepca_back),
+                        )
+                    }
+                },
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { addOpen = true }) {
+                Icon(Icons.Filled.Add, contentDescription = stringResource(R.string.stepca_add))
+            }
+        },
+    ) { padding ->
+        if (configs.isEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    Icons.Filled.VpnKey,
+                    contentDescription = null,
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    stringResource(R.string.stepca_empty_state),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        } else {
+            LazyColumn(modifier = Modifier.padding(padding)) {
+                items(configs, key = { it.id }) { config ->
+                    StepCaConfigRow(
+                        config = config,
+                        testResult = testResults[config.id],
+                        testing = config.id in testInFlight,
+                        onTest = { viewModel.test(config) },
+                        onEdit = { editing = config },
+                        onDelete = { pendingDelete = config },
+                    )
+                }
+            }
+        }
+    }
+
+    if (addOpen) {
+        StepCaConfigDialog(
+            initial = null,
+            onDismiss = { addOpen = false },
+            onConfirm = {
+                viewModel.save(it)
+                addOpen = false
+            },
+        )
+    }
+    editing?.let { existing ->
+        StepCaConfigDialog(
+            initial = existing,
+            onDismiss = { editing = null },
+            onConfirm = {
+                viewModel.save(it)
+                editing = null
+            },
+        )
+    }
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text(stringResource(R.string.stepca_delete_confirm_title, target.name)) },
+            text = { Text(stringResource(R.string.stepca_delete_confirm_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.delete(target.id)
+                    pendingDelete = null
+                }) {
+                    Text(stringResource(R.string.stepca_delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) {
+                    Text(stringResource(R.string.stepca_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun StepCaConfigRow(
+    config: StepCaConfig,
+    testResult: StepCaApiClient.TestResult?,
+    testing: Boolean,
+    onTest: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val context = LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
+    val supporting = remember(testResult, testing) {
+        when {
+            testing -> null
+            testResult is StepCaApiClient.TestResult.Ok ->
+                context.getString(R.string.stepca_test_ok)
+            testResult is StepCaApiClient.TestResult.BadRootCert ->
+                context.getString(R.string.stepca_test_bad_root_cert, testResult.reason)
+            testResult is StepCaApiClient.TestResult.HttpError ->
+                context.getString(R.string.stepca_test_http_error, testResult.code, testResult.message)
+            testResult is StepCaApiClient.TestResult.NetworkError ->
+                context.getString(R.string.stepca_test_network_error, testResult.message)
+            else -> config.caUrl
+        }
+    }
+    val statusIcon: @Composable () -> Unit = {
+        when {
+            testing -> CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                strokeWidth = 2.dp,
+            )
+            testResult is StepCaApiClient.TestResult.Ok -> Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            testResult is StepCaApiClient.TestResult.BadRootCert ||
+            testResult is StepCaApiClient.TestResult.HttpError ||
+            testResult is StepCaApiClient.TestResult.NetworkError -> Icon(
+                Icons.Filled.Error,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+            )
+            else -> Icon(Icons.Filled.VpnKey, contentDescription = null)
+        }
+    }
+
+    ListItem(
+        leadingContent = statusIcon,
+        headlineContent = { Text(config.name) },
+        supportingContent = supporting?.let { { Text(it) } },
+        trailingContent = {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Filled.MoreVert, contentDescription = null)
+                }
+                DropdownMenu(
+                    expanded = menuOpen,
+                    onDismissRequest = { menuOpen = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.stepca_test_connection)) },
+                        leadingIcon = { Icon(Icons.Filled.NetworkCheck, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onTest()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.stepca_edit_title)) },
+                        onClick = {
+                            menuOpen = false
+                            onEdit()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.stepca_delete)) },
+                        leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        },
+                    )
+                }
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StepCaConfigDialog(
+    initial: StepCaConfig?,
+    onDismiss: () -> Unit,
+    onConfirm: (StepCaConfig) -> Unit,
+) {
+    var name by remember { mutableStateOf(initial?.name.orEmpty()) }
+    var caUrl by remember { mutableStateOf(initial?.caUrl.orEmpty()) }
+    var oidcIssuer by remember { mutableStateOf(initial?.oidcIssuer.orEmpty()) }
+    var oidcAuthUrl by remember { mutableStateOf(initial?.oidcAuthUrl.orEmpty()) }
+    var oidcTokenUrl by remember { mutableStateOf(initial?.oidcTokenUrl.orEmpty()) }
+    var oidcClientId by remember { mutableStateOf(initial?.oidcClientId.orEmpty()) }
+    var provisioner by remember { mutableStateOf(initial?.provisioner.orEmpty()) }
+    var principals by remember { mutableStateOf(initial?.defaultPrincipals.orEmpty()) }
+    var rootCert by remember { mutableStateOf(initial?.rootCertPem.orEmpty()) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    val context = LocalContext.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                stringResource(
+                    if (initial == null) R.string.stepca_add_title else R.string.stepca_edit_title,
+                ),
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(max = 480.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text(stringResource(R.string.stepca_field_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = caUrl,
+                    onValueChange = { caUrl = it },
+                    label = { Text(stringResource(R.string.stepca_field_ca_url)) },
+                    placeholder = { Text(stringResource(R.string.stepca_field_ca_url_hint)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        capitalization = KeyboardCapitalization.None,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = oidcIssuer,
+                    onValueChange = { oidcIssuer = it },
+                    label = { Text(stringResource(R.string.stepca_field_oidc_issuer)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = oidcAuthUrl,
+                    onValueChange = { oidcAuthUrl = it },
+                    label = { Text(stringResource(R.string.stepca_field_oidc_auth_url)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = oidcTokenUrl,
+                    onValueChange = { oidcTokenUrl = it },
+                    label = { Text(stringResource(R.string.stepca_field_oidc_token_url)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = oidcClientId,
+                    onValueChange = { oidcClientId = it },
+                    label = { Text(stringResource(R.string.stepca_field_oidc_client_id)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = provisioner,
+                    onValueChange = { provisioner = it },
+                    label = { Text(stringResource(R.string.stepca_field_provisioner)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = principals,
+                    onValueChange = { principals = it },
+                    label = { Text(stringResource(R.string.stepca_field_principals)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = rootCert,
+                    onValueChange = { rootCert = it },
+                    label = { Text(stringResource(R.string.stepca_field_root_cert)) },
+                    placeholder = { Text(stringResource(R.string.stepca_field_root_cert_hint)) },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                )
+                error?.let {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val problem = validate(
+                    context = context,
+                    name = name,
+                    caUrl = caUrl,
+                    oidcIssuer = oidcIssuer,
+                    oidcAuthUrl = oidcAuthUrl,
+                    oidcTokenUrl = oidcTokenUrl,
+                    oidcClientId = oidcClientId,
+                    provisioner = provisioner,
+                    rootCert = rootCert,
+                )
+                if (problem != null) {
+                    error = problem
+                    return@TextButton
+                }
+                val out = (initial ?: StepCaConfig(
+                    name = name.trim(),
+                    caUrl = caUrl.trim(),
+                    oidcIssuer = oidcIssuer.trim(),
+                    oidcAuthUrl = oidcAuthUrl.trim(),
+                    oidcTokenUrl = oidcTokenUrl.trim(),
+                    oidcClientId = oidcClientId.trim(),
+                    provisioner = provisioner.trim(),
+                    defaultPrincipals = principals.trim(),
+                    rootCertPem = rootCert.trim(),
+                )).copy(
+                    name = name.trim(),
+                    caUrl = caUrl.trim(),
+                    oidcIssuer = oidcIssuer.trim(),
+                    oidcAuthUrl = oidcAuthUrl.trim(),
+                    oidcTokenUrl = oidcTokenUrl.trim(),
+                    oidcClientId = oidcClientId.trim(),
+                    provisioner = provisioner.trim(),
+                    defaultPrincipals = principals.trim(),
+                    rootCertPem = rootCert.trim(),
+                )
+                onConfirm(out)
+            }) {
+                Text(stringResource(R.string.stepca_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.stepca_cancel))
+            }
+        },
+    )
+}
+
+private fun validate(
+    context: android.content.Context,
+    name: String,
+    caUrl: String,
+    oidcIssuer: String,
+    oidcAuthUrl: String,
+    oidcTokenUrl: String,
+    oidcClientId: String,
+    provisioner: String,
+    rootCert: String,
+): String? {
+    fun req(field: String, value: String) =
+        if (value.isBlank()) context.getString(R.string.stepca_validation_required, field) else null
+
+    req(context.getString(R.string.stepca_field_name), name)?.let { return it }
+    req(context.getString(R.string.stepca_field_ca_url), caUrl)?.let { return it }
+    req(context.getString(R.string.stepca_field_oidc_issuer), oidcIssuer)?.let { return it }
+    req(context.getString(R.string.stepca_field_oidc_auth_url), oidcAuthUrl)?.let { return it }
+    req(context.getString(R.string.stepca_field_oidc_token_url), oidcTokenUrl)?.let { return it }
+    req(context.getString(R.string.stepca_field_oidc_client_id), oidcClientId)?.let { return it }
+    req(context.getString(R.string.stepca_field_provisioner), provisioner)?.let { return it }
+    req(context.getString(R.string.stepca_field_root_cert), rootCert)?.let { return it }
+
+    fun https(field: String, value: String) =
+        if (!value.trim().startsWith("https://")) {
+            context.getString(R.string.stepca_validation_url, field)
+        } else null
+
+    https(context.getString(R.string.stepca_field_ca_url), caUrl)?.let { return it }
+    https(context.getString(R.string.stepca_field_oidc_auth_url), oidcAuthUrl)?.let { return it }
+    https(context.getString(R.string.stepca_field_oidc_token_url), oidcTokenUrl)?.let { return it }
+
+    if (!rootCert.trim().startsWith("-----BEGIN CERTIFICATE-----")) {
+        return context.getString(R.string.stepca_validation_pem)
+    }
+    return null
+}

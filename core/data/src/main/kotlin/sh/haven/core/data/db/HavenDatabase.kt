@@ -12,6 +12,7 @@ import sh.haven.core.data.db.entities.KnownHost
 import sh.haven.core.data.db.entities.PasteQueueEntry
 import sh.haven.core.data.db.entities.PortForwardRule
 import sh.haven.core.data.db.entities.SshKey
+import sh.haven.core.data.db.entities.StepCaConfig
 import sh.haven.core.data.db.entities.TunnelConfig
 import sh.haven.core.data.db.entities.WorkspaceItem
 import sh.haven.core.data.db.entities.WorkspaceProfile
@@ -29,8 +30,9 @@ import sh.haven.core.data.db.entities.WorkspaceProfile
         PasteQueueEntry::class,
         WorkspaceProfile::class,
         WorkspaceItem::class,
+        StepCaConfig::class,
     ],
-    version = 47,
+    version = 48,
     exportSchema = true,
 )
 abstract class HavenDatabase : RoomDatabase() {
@@ -44,6 +46,7 @@ abstract class HavenDatabase : RoomDatabase() {
     abstract fun tunnelConfigDao(): TunnelConfigDao
     abstract fun pasteQueueDao(): PasteQueueDao
     abstract fun workspaceDao(): WorkspaceDao
+    abstract fun stepCaConfigDao(): StepCaConfigDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -659,6 +662,40 @@ abstract class HavenDatabase : RoomDatabase() {
         val MIGRATION_46_47 = object : Migration(46, 47) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE connection_profiles ADD COLUMN terminalColorScheme TEXT")
+            }
+        }
+
+        /**
+         * #133 phase 2: register step-ca certificate authorities the user
+         * has configured. Each row stores the CA URL, OIDC endpoints,
+         * provisioner name, default principals, and the pinned root cert
+         * PEM. Plus two audit fields on `ssh_keys` — `caConfigId` (which
+         * CA minted this cert) and `certIssuedAt` (when) — both nullable
+         * so existing keys keep working. The auth path is unchanged; JSch
+         * still reads `certificateBytes` via OpenSshCertificateAwareIdentityFile.
+         */
+        val MIGRATION_47_48 = object : Migration(47, 48) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `step_ca_configs` (
+                        `id` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `caUrl` TEXT NOT NULL,
+                        `oidcIssuer` TEXT NOT NULL,
+                        `oidcAuthUrl` TEXT NOT NULL,
+                        `oidcTokenUrl` TEXT NOT NULL,
+                        `oidcClientId` TEXT NOT NULL,
+                        `provisioner` TEXT NOT NULL,
+                        `defaultPrincipals` TEXT NOT NULL,
+                        `rootCertPem` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`id`)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("ALTER TABLE ssh_keys ADD COLUMN caConfigId TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE ssh_keys ADD COLUMN certIssuedAt INTEGER DEFAULT NULL")
             }
         }
     }

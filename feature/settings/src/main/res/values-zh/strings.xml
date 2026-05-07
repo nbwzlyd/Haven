@@ -222,4 +222,40 @@
     <string name="settings_mcp_tunnel_title">通过哪个连接配置文件转发 MCP？</string>
     <string name="settings_font_install_title">从 URL 安装字体</string>
     <string name="settings_ime_flags_title">输入法标志</string>
+
+    <!-- #133 第二阶段：step-ca 证书颁发机构 -->
+    <string name="settings_section_certificate_authorities">证书颁发机构</string>
+    <string name="settings_stepca_title">step-ca 颁发机构</string>
+    <string name="settings_stepca_subtitle_empty">尚未配置 CA。添加一个以通过 OIDC 颁发短期 SSH 证书。</string>
+    <string name="settings_stepca_subtitle_count">已配置 %1$d 个</string>
+    <string name="stepca_back">返回</string>
+    <string name="stepca_add_title">添加证书颁发机构</string>
+    <string name="stepca_edit_title">编辑证书颁发机构</string>
+    <string name="stepca_screen_title">证书颁发机构</string>
+    <string name="stepca_add">添加</string>
+    <string name="stepca_save">保存</string>
+    <string name="stepca_cancel">取消</string>
+    <string name="stepca_delete">删除</string>
+    <string name="stepca_test_connection">测试连接</string>
+    <string name="stepca_field_name">显示名称</string>
+    <string name="stepca_field_ca_url">CA 地址</string>
+    <string name="stepca_field_ca_url_hint">https://ca.example.com</string>
+    <string name="stepca_field_oidc_issuer">OIDC 颁发者 URL</string>
+    <string name="stepca_field_oidc_auth_url">OIDC 授权 URL</string>
+    <string name="stepca_field_oidc_token_url">OIDC 令牌 URL</string>
+    <string name="stepca_field_oidc_client_id">OIDC 客户端 ID</string>
+    <string name="stepca_field_provisioner">step-ca 提供方</string>
+    <string name="stepca_field_principals">默认主体（逗号分隔）</string>
+    <string name="stepca_field_root_cert">根证书（PEM）</string>
+    <string name="stepca_field_root_cert_hint">-----BEGIN CERTIFICATE-----…</string>
+    <string name="stepca_test_ok">可达</string>
+    <string name="stepca_test_bad_root_cert">根证书无效：%1$s</string>
+    <string name="stepca_test_http_error">HTTP %1$d：%2$s</string>
+    <string name="stepca_test_network_error">网络错误：%1$s</string>
+    <string name="stepca_empty_state">尚未配置证书颁发机构。\n点击 + 添加一个。</string>
+    <string name="stepca_validation_required">%1$s 不能为空</string>
+    <string name="stepca_validation_url">%1$s 必须以 https:// 开头</string>
+    <string name="stepca_validation_pem">根证书必须为 PEM 编码</string>
+    <string name="stepca_delete_confirm_title">删除 %1$s 吗？</string>
+    <string name="stepca_delete_confirm_body">通过此 CA 颁发的现有密钥在证书到期前仍可使用，但您将无法续期或生成新密钥。</string>
 </resources>

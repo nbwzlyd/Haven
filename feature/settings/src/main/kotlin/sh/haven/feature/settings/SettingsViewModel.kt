@@ -24,6 +24,7 @@ import sh.haven.core.data.preferences.ToolbarLayout
 import sh.haven.core.data.preferences.UserPreferencesRepository
 import sh.haven.core.data.repository.ConnectionRepository
 import sh.haven.core.data.repository.PortForwardRepository
+import sh.haven.core.data.repository.StepCaConfigRepository
 import sh.haven.core.security.BiometricAuthenticator
 import sh.haven.core.ssh.SshSessionManager
 import kotlinx.coroutines.Dispatchers
@@ -45,7 +46,15 @@ class SettingsViewModel @Inject constructor(
     private val sshSessionManager: SshSessionManager,
     private val agentConsentManager: AgentConsentManager,
     private val terminalFontInstaller: TerminalFontInstaller,
+    stepCaConfigRepository: StepCaConfigRepository,
 ) : ViewModel() {
+
+    /** Live count of registered step-ca CAs (#133 phase 2) — drives the
+     *  Settings entry's subtitle so users see new CAs reflected without
+     *  drilling in. */
+    val stepCaConfigs: StateFlow<List<sh.haven.core.data.db.entities.StepCaConfig>> =
+        stepCaConfigRepository.observeAll()
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val terminalFontPath: StateFlow<String?> = preferencesRepository.terminalFontPath
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)

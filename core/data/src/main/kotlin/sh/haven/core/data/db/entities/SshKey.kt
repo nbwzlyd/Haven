@@ -33,6 +33,20 @@ data class SshKey(
      * applied. Null for the common case (#133 phase 1).
      */
     val certificateBytes: ByteArray? = null,
+    /**
+     * If this key was minted via step-ca (#133 phase 2), points at the
+     * `StepCaConfig.id` that was used. Carries no auth weight — kept so
+     * the Keys screen can show "Valid until …" and so phase 2b's
+     * renewal job can find the right CA to re-sign against. Null for
+     * locally-generated and manually-imported keys.
+     */
+    val caConfigId: String? = null,
+    /**
+     * Wall-clock millis when [certificateBytes] was issued. Used purely
+     * for the UI badge — actual cert validity comes from the cert blob
+     * itself (which step-ca controls). Null for keys without a cert.
+     */
+    val certIssuedAt: Long? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true

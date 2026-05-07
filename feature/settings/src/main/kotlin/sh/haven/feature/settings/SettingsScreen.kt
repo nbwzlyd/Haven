@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.VpnLock
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.History
@@ -174,6 +175,7 @@ fun SettingsScreen(
     val waylandShellCommand by viewModel.waylandShellCommand.collectAsState()
     val mediaExtensions by viewModel.mediaExtensions.collectAsState()
     var showAuditLog by remember { mutableStateOf(false) }
+    var showStepCaSettings by remember { mutableStateOf(false) }
     var showAgentActivity by remember { mutableStateOf(false) }
     var showMcpTunnelPicker by remember { mutableStateOf(false) }
     var showFontUrlDialog by remember { mutableStateOf(false) }
@@ -283,6 +285,10 @@ fun SettingsScreen(
 
     if (showAuditLog) {
         AuditLogScreen(onBack = { showAuditLog = false })
+        return
+    }
+    if (showStepCaSettings) {
+        StepCaSettingsScreen(onBack = { showStepCaSettings = false })
         return
     }
     if (showAgentActivity) {
@@ -815,6 +821,25 @@ fun SettingsScreen(
                     CircularProgressIndicator(modifier = Modifier.size(24.dp))
                 },
                 modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
+
+        run {
+            // Step-ca CA registration. Sub-screen handles add/edit/delete +
+            // test-connection; here we just surface the entry and a
+            // count-badge subtitle so users with multiple CAs see it
+            // changed without drilling in. (#133 phase 2)
+            val stepCaConfigs by viewModel.stepCaConfigs.collectAsState()
+            SettingsSection(stringResource(R.string.settings_section_certificate_authorities))
+            SettingsItem(
+                icon = Icons.Filled.VpnKey,
+                title = stringResource(R.string.settings_stepca_title),
+                subtitle = if (stepCaConfigs.isEmpty()) {
+                    stringResource(R.string.settings_stepca_subtitle_empty)
+                } else {
+                    stringResource(R.string.settings_stepca_subtitle_count, stepCaConfigs.size)
+                },
+                onClick = { showStepCaSettings = true },
             )
         }
 

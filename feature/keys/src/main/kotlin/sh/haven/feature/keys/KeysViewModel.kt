@@ -22,8 +22,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.haven.core.data.db.entities.SshKey
+import sh.haven.core.data.db.entities.StepCaConfig
 import sh.haven.core.data.repository.ConnectionRepository
 import sh.haven.core.data.repository.SshKeyRepository
+import sh.haven.core.data.repository.StepCaConfigRepository
 import sh.haven.core.fido.SkKeyData
 import sh.haven.core.fido.SkKeyParser
 import sh.haven.core.security.Keystore
@@ -33,6 +35,7 @@ import sh.haven.core.security.KeystoreStore
 import sh.haven.core.security.SshKeyGenerator
 import sh.haven.core.ssh.SshKeyExporter
 import sh.haven.core.ssh.SshKeyImporter
+import sh.haven.core.stepca.StepCaSignFlow
 import javax.inject.Inject
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -41,7 +44,15 @@ class KeysViewModel @Inject constructor(
     private val repository: SshKeyRepository,
     private val connectionRepository: ConnectionRepository,
     private val keystore: Keystore,
+    private val stepCaConfigRepository: StepCaConfigRepository,
+    private val stepCaSignFlow: StepCaSignFlow,
 ) : ViewModel() {
+
+    /** Registered step-ca CAs (#133 phase 2). The Keys "Generate via
+     *  step-ca" affordance disables itself when this is empty and links
+     *  the user to Settings. */
+    val stepCaConfigs: StateFlow<List<StepCaConfig>> = stepCaConfigRepository.observeAll()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val keys: StateFlow<List<SshKey>> = repository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -152,6 +163,65 @@ class KeysViewModel @Inject constructor(
                 repository.save(entity)
             } catch (e: Exception) {
                 _error.value = e.message ?: "Key generation failed"
+            } finally {
+                _generating.value = false
+            }
+        }
+    }
+
+    /**
+     * Generate an Ed25519 keypair locally, run the OIDC handshake against
+     * [caConfigId], post the public key to step-ca, and persist the
+     * resulting key+cert as a single [SshKey] row. (#133 phase 2)
+     *
+     * @param principalsOverride if non-empty, replaces the CA's
+     *   defaultPrincipals for this one mint.
+     */
+    fun generateViaStepCa(
+        label: String,
+        caConfigId: String,
+        principalsOverride: List<String> = emptyList(),
+    ) {
+        viewModelScope.launch {
+            _generating.value = true
+            _error.value = null
+            try {
+                val caConfig = stepCaConfigRepository.getById(caConfigId)
+                    ?: run {
+                        _error.value = "step-ca config not found"
+                        return@launch
+                    }
+                val generated = withContext(Dispatchers.Default) {
+                    SshKeyGenerator.generate(SshKeyGenerator.KeyType.ED25519, label)
+                }
+                val signResult = stepCaSignFlow.run(
+                    caConfig = caConfig,
+                    publicKeyOpenSsh = generated.publicKeyOpenSsh,
+                    keyLabel = label,
+                    principalsOverride = principalsOverride.takeIf { it.isNotEmpty() },
+                )
+                when (signResult) {
+                    is StepCaSignFlow.Result.Failure -> {
+                        _error.value = signResult.message
+                        return@launch
+                    }
+                    is StepCaSignFlow.Result.Success -> {
+                        val entity = SshKey(
+                            label = label,
+                            keyType = generated.type.sshName,
+                            privateKeyBytes = generated.privateKeyBytes,
+                            publicKeyOpenSsh = generated.publicKeyOpenSsh,
+                            fingerprintSha256 = generated.fingerprintSha256,
+                            certificateBytes = signResult.certBytes,
+                            caConfigId = caConfig.id,
+                            certIssuedAt = System.currentTimeMillis(),
+                        )
+                        repository.save(entity)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("KeysViewModel", "step-ca generate failed", e)
+                _error.value = e.message ?: "step-ca generation failed"
             } finally {
                 _generating.value = false
             }

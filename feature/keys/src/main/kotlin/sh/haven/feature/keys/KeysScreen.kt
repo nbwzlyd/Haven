@@ -100,6 +100,8 @@ fun KeysScreen(
 
     var showAddKeyDialog by remember { mutableStateOf(false) }
     var showGenerateDialog by remember { mutableStateOf(false) }
+    var showStepCaDialog by remember { mutableStateOf(false) }
+    val stepCaConfigs by viewModel.stepCaConfigs.collectAsState()
     var contextMenuKeyId by remember { mutableStateOf<String?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -276,9 +278,14 @@ fun KeysScreen(
 
     if (showAddKeyDialog) {
         AddKeyChooser(
+            stepCaConfigCount = stepCaConfigs.size,
             onGenerate = {
                 showAddKeyDialog = false
                 showGenerateDialog = true
+            },
+            onGenerateStepCa = {
+                showAddKeyDialog = false
+                showStepCaDialog = true
             },
             onImport = {
                 showAddKeyDialog = false
@@ -310,6 +317,17 @@ fun KeysScreen(
         )
     }
 
+    if (showStepCaDialog && stepCaConfigs.isNotEmpty()) {
+        GenerateStepCaDialog(
+            cas = stepCaConfigs,
+            onDismiss = { showStepCaDialog = false },
+            onGenerate = { label, caId, principals ->
+                viewModel.generateViaStepCa(label, caId, principals)
+                showStepCaDialog = false
+            },
+        )
+    }
+
     if (needsPassphrase) {
         PassphraseDialog(
             onConfirm = { viewModel.retryImportWithPassphrase(it) },
@@ -329,7 +347,9 @@ fun KeysScreen(
 
 @Composable
 private fun AddKeyChooser(
+    stepCaConfigCount: Int,
     onGenerate: () -> Unit,
+    onGenerateStepCa: () -> Unit,
     onImport: () -> Unit,
     onPaste: () -> Unit,
     onDismiss: () -> Unit,
@@ -345,6 +365,32 @@ private fun AddKeyChooser(
                     supportingContent = { Text(stringResource(R.string.keys_generate_key_types)) },
                     leadingContent = {
                         Icon(Icons.Filled.Add, contentDescription = null)
+                    },
+                )
+                ListItem(
+                    modifier = if (stepCaConfigCount > 0) {
+                        Modifier.clickable { onGenerateStepCa() }
+                    } else Modifier,
+                    headlineContent = { Text(stringResource(R.string.keys_generate_via_stepca)) },
+                    supportingContent = {
+                        Text(
+                            stringResource(
+                                if (stepCaConfigCount > 0) R.string.keys_generate_via_stepca_hint
+                                else R.string.keys_generate_via_stepca_no_ca,
+                            ),
+                            color = if (stepCaConfigCount == 0)
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = {
+                        Icon(
+                            Icons.Filled.VpnKey,
+                            contentDescription = null,
+                            tint = if (stepCaConfigCount > 0)
+                                MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     },
                 )
                 ListItem(
@@ -622,11 +668,19 @@ private fun SshKeyAuditRow(
                 ) {
                     flags.sortedBy { it.ordinal }.forEach { flag -> FlagChip(flag) }
                     if (hasCertificate) {
+                        val certLabel = if (sshKey.certIssuedAt != null && sshKey.caConfigId != null) {
+                            stringResource(
+                                R.string.keys_chip_certificate_minted,
+                                formatDate(sshKey.certIssuedAt!!),
+                            )
+                        } else {
+                            stringResource(R.string.keys_chip_certificate)
+                        }
                         AssistChip(
                             onClick = {},
                             label = {
                                 Text(
-                                    stringResource(R.string.keys_chip_certificate),
+                                    certLabel,
                                     style = MaterialTheme.typography.labelSmall,
                                 )
                             },

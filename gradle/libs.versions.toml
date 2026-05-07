@@ -20,6 +20,7 @@ core-ktx = "1.17.0"
 activity-compose = "1.10.1"
 shizuku-api = "13.1.5"
 ksp = "2.3.6"
+androidx-browser = "1.8.0"
 
 [libraries]
 # Compose BOM
@@ -42,6 +43,7 @@ lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime-co
 lifecycle-viewmodel = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycle" }
 navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation" }
+androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "androidx-browser" }
 
 # Hilt
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }

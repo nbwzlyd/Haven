@@ -78,4 +78,15 @@
     <string name="keys_attach_certificate">附加证书</string>
     <string name="keys_remove_certificate">移除证书</string>
     <string name="keys_chip_certificate">已附加证书</string>
+
+    <!-- #133 第二阶段：通过 step-ca 生成 -->
+    <string name="keys_generate_via_stepca">通过 step-ca 生成</string>
+    <string name="keys_generate_via_stepca_hint">OIDC 登录后生成密钥对并签发证书</string>
+    <string name="keys_generate_via_stepca_no_ca">请先在设置 → 证书颁发机构中添加一个 CA</string>
+    <string name="keys_stepca_dialog_title">通过 step-ca 生成</string>
+    <string name="keys_stepca_pick_ca">证书颁发机构</string>
+    <string name="keys_stepca_principals_override_label">覆盖主体（可选，逗号分隔）</string>
+    <string name="keys_stepca_label">密钥标签</string>
+    <string name="keys_stepca_generate">生成</string>
+    <string name="keys_chip_certificate_minted">%1$s 颁发</string>
 </resources>
