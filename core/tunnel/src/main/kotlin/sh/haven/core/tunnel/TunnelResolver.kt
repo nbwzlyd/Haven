@@ -49,13 +49,18 @@ class TunnelResolver @Inject constructor(
         port: Int,
         timeoutMs: Int,
     ): TunneledConnection? {
-        val tunnel = tunnelFor(profile) ?: return null
-        return tunnel.dial(host, port, timeoutMs)
+        tunnelFor(profile)?.let { return it.dial(host, port, timeoutMs) }
+        // Fall through to legacy SOCKS / HTTP proxy if configured.
+        proxySocketFactoryFor(profile, timeoutMs)?.let { factory ->
+            val socket = factory.createSocket(host, port)
+            return SocketTunneledConnection(socket)
+        }
+        return null
     }
 
     suspend fun socketFactory(profile: ConnectionProfile): SocketFactory? {
-        val tunnel = tunnelFor(profile) ?: return null
-        return TunnelSocketFactory(tunnel)
+        tunnelFor(profile)?.let { return TunnelSocketFactory(it) }
+        return proxySocketFactoryFor(profile)
     }
 
     suspend fun socksEndpoint(profile: ConnectionProfile): InetSocketAddress? {
@@ -96,5 +101,30 @@ class TunnelResolver @Inject constructor(
     private suspend fun tunnelFor(profile: ConnectionProfile): Tunnel? {
         val tunnelId = profile.tunnelConfigId ?: return null
         return tunnelManager.acquire(tunnelId, profile.id)
+    }
+
+    private fun proxySocketFactoryFor(
+        profile: ConnectionProfile,
+        timeoutMs: Int = 30_000,
+    ): ProxySocketFactory? {
+        val type = profile.proxyType ?: return null
+        val host = profile.proxyHost ?: return null
+        return ProxySocketFactory(type, host, profile.proxyPort, timeoutMs)
+    }
+}
+
+/**
+ * Adapts a [Socket] (typically returned by [ProxySocketFactory]) to the
+ * [TunneledConnection] interface so callers of [TunnelResolver.dial]
+ * see a uniform shape regardless of whether the routing layer is a
+ * userspace tunnel or a JDK-style proxy.
+ */
+private class SocketTunneledConnection(
+    private val socket: java.net.Socket,
+) : TunneledConnection {
+    override val inputStream: java.io.InputStream = socket.getInputStream()
+    override val outputStream: java.io.OutputStream = socket.getOutputStream()
+    override fun close() {
+        try { socket.close() } catch (_: Throwable) { /* best-effort */ }
     }
 }

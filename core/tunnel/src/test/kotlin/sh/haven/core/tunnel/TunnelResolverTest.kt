@@ -168,6 +168,36 @@ class TunnelResolverTest {
     }
 
     @Test
+    fun socketFactoryReturnsProxyFactoryWhenOnlyProxySet() = runTest {
+        val resolver = TunnelResolver(mockk(relaxed = true))
+        val factory = resolver.socketFactory(
+            profile(proxyType = "SOCKS5", proxyHost = "127.0.0.1", proxyPort = 1080),
+        )
+        assertNotNull(factory)
+        assertTrue(factory is ProxySocketFactory)
+    }
+
+    @Test
+    fun socketFactoryPrefersTunnelOverProxy() = runTest {
+        val tunnel = mockk<Tunnel>(relaxed = true)
+        val mgr = mockk<TunnelManager> {
+            coEvery { acquire("tid", any()) } returns tunnel
+        }
+        val resolver = TunnelResolver(mgr)
+        val p = profile(tunnelConfigId = "tid", proxyType = "SOCKS5", proxyHost = "127.0.0.1", proxyPort = 1080)
+
+        val factory = resolver.socketFactory(p)
+
+        assertTrue("tunnel must take precedence", factory is TunnelSocketFactory)
+    }
+
+    @Test
+    fun socketFactoryReturnsNullWhenNeitherTunnelNorProxy() = runTest {
+        val resolver = TunnelResolver(mockk(relaxed = true))
+        assertNull(resolver.socketFactory(profile()))
+    }
+
+    @Test
     fun releaseForwardsToManager() = runTest {
         val mgr = mockk<TunnelManager>(relaxed = true)
         val resolver = TunnelResolver(mgr)
