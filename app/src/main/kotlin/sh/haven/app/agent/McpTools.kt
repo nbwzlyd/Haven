@@ -1747,31 +1747,29 @@ internal class McpTools(
         }
         if (!args.has("value")) throw McpError(-32602, "Missing required argument: value")
         val rawValue = args.opt("value")
+        // Coerce permissively — different MCP clients serialise JSON
+        // numerics inconsistently. JSONObject.opt() may hand back
+        // Integer, Long, Double, or even a String that parses as a
+        // number; the caller's intent is unambiguous either way.
+        fun coerceInt(): Int = when (rawValue) {
+            is Number -> rawValue.toInt()
+            is String -> rawValue.toIntOrNull()
+                ?: throw McpError(-32602, "value must be an integer for $key, got \"$rawValue\"")
+            else -> throw McpError(-32602, "value must be an integer for $key, got ${rawValue?.javaClass?.simpleName}")
+        }
+        fun coerceBool(): Boolean = when (rawValue) {
+            is Boolean -> rawValue
+            is String -> rawValue.toBooleanStrictOrNull()
+                ?: throw McpError(-32602, "value must be true/false for $key, got \"$rawValue\"")
+            else -> throw McpError(-32602, "value must be a boolean for $key, got ${rawValue?.javaClass?.simpleName}")
+        }
         when (key) {
-            "terminal_scrollback_rows" -> {
-                val v = (rawValue as? Number)?.toInt() ?: throw McpError(-32602, "value must be an integer for $key")
-                preferencesRepository.setTerminalScrollbackRows(v)
-            }
-            "terminal_font_size" -> {
-                val v = (rawValue as? Number)?.toInt() ?: throw McpError(-32602, "value must be an integer for $key")
-                preferencesRepository.setTerminalFontSize(v)
-            }
-            "terminal_tap_to_position_cursor" -> {
-                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
-                preferencesRepository.setTerminalTapToPositionCursor(v)
-            }
-            "mouse_input_enabled" -> {
-                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
-                preferencesRepository.setMouseInputEnabled(v)
-            }
-            "mouse_drag_selects" -> {
-                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
-                preferencesRepository.setMouseDragSelects(v)
-            }
-            "terminal_right_click" -> {
-                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
-                preferencesRepository.setTerminalRightClick(v)
-            }
+            "terminal_scrollback_rows" -> preferencesRepository.setTerminalScrollbackRows(coerceInt())
+            "terminal_font_size" -> preferencesRepository.setTerminalFontSize(coerceInt())
+            "terminal_tap_to_position_cursor" -> preferencesRepository.setTerminalTapToPositionCursor(coerceBool())
+            "mouse_input_enabled" -> preferencesRepository.setMouseInputEnabled(coerceBool())
+            "mouse_drag_selects" -> preferencesRepository.setMouseDragSelects(coerceBool())
+            "terminal_right_click" -> preferencesRepository.setTerminalRightClick(coerceBool())
         }
         return JSONObject().apply {
             put("key", key)
