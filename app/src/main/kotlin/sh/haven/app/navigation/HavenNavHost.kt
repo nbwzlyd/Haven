@@ -199,6 +199,8 @@ fun HavenNavHost(
         .collectAsState(initial = true)
     val terminalRightClick by preferencesRepository.terminalRightClick
         .collectAsState(initial = false)
+    val tapToPositionCursorOnPrompt by preferencesRepository.terminalTapToPositionCursor
+        .collectAsState(initial = false)
     val allowStandardKeyboard by preferencesRepository.allowStandardKeyboard
         .collectAsState(initial = false)
     val rawKeyboardMode by preferencesRepository.rawKeyboardMode
@@ -377,6 +379,7 @@ fun HavenNavHost(
                         mouseInputEnabled = mouseInputEnabled,
                         mouseDragSelects = mouseDragSelects,
                         terminalRightClick = terminalRightClick,
+                        tapToPositionCursorOnPrompt = tapToPositionCursorOnPrompt,
                         allowStandardKeyboard = allowStandardKeyboard,
                         onToggleStandardKeyboard = {
                             coroutineScope.launch {

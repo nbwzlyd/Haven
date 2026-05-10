@@ -53,6 +53,7 @@ fun HavenTerminal(
     onPasteShortcut: (() -> Unit)? = null,
     onPasteRequest: (() -> Unit)? = null,
     keyboardMode: HavenKeyboardMode = HavenKeyboardMode.Secure,
+    tapToPositionCursorOnPrompt: Boolean = false,
 ) {
     Terminal(
         terminalEmulator = terminalEmulator,
@@ -90,5 +91,6 @@ fun HavenTerminal(
         },
         onPasteShortcut = onPasteShortcut,
         onPasteRequest = onPasteRequest,
+        tapToPositionCursorOnPrompt = tapToPositionCursorOnPrompt,
     )
 }

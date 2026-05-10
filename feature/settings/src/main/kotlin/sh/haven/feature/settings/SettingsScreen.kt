@@ -166,6 +166,7 @@ fun SettingsScreen(
     val desktopInputMode by viewModel.desktopInputMode.collectAsState()
     val bandwidthAutoSuggest by viewModel.bandwidthAutoSuggest.collectAsState()
     val terminalRightClick by viewModel.terminalRightClick.collectAsState()
+    val tapToPositionCursorOnPrompt by viewModel.terminalTapToPositionCursor.collectAsState()
     val allowStandardKeyboard by viewModel.allowStandardKeyboard.collectAsState()
     val rawKeyboardMode by viewModel.rawKeyboardMode.collectAsState()
     val keyboardCustomMode by viewModel.keyboardCustomMode.collectAsState()
@@ -532,6 +533,13 @@ fun SettingsScreen(
             subtitle = stringResource(R.string.settings_right_click_subtitle),
             checked = terminalRightClick,
             onCheckedChange = viewModel::setTerminalRightClick,
+        )
+        SettingsToggleItem(
+            icon = Icons.Filled.Terminal,
+            title = stringResource(R.string.settings_tap_to_position_title),
+            subtitle = stringResource(R.string.settings_tap_to_position_subtitle),
+            checked = tapToPositionCursorOnPrompt,
+            onCheckedChange = viewModel::setTerminalTapToPositionCursor,
         )
         SettingsToggleItem(
             icon = Icons.Filled.ListAlt,

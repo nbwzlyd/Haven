@@ -19,6 +19,7 @@ class UserPreferencesRepository @Inject constructor(
     private val biometricEnabledKey = booleanPreferencesKey("biometric_enabled")
     private val terminalFontSizeKey = intPreferencesKey("terminal_font_size")
     private val terminalScrollbackRowsKey = intPreferencesKey("terminal_scrollback_rows")
+    private val terminalTapToPositionCursorKey = booleanPreferencesKey("terminal_tap_to_position_cursor")
     // Absolute path to a user-chosen Nerd Font (or any TTF/OTF). #123.
     private val terminalFontPathKey = stringPreferencesKey("terminal_font_path")
     private val themeKey = stringPreferencesKey("theme")
@@ -474,6 +475,24 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setTerminalScrollbackRows(rows: Int) {
         dataStore.edit { prefs ->
             prefs[terminalScrollbackRowsKey] = rows.coerceIn(MIN_SCROLLBACK_ROWS, MAX_SCROLLBACK_ROWS)
+        }
+    }
+
+    /**
+     * Tap on a shell prompt's input line moves the readline cursor to the
+     * tapped column by synthesising arrow-key dispatches. Requires the
+     * shell to emit OSC 133 prompt markers (starship, fish 3.6+, recent
+     * bash/zsh shell-integration setups). Default off — surfaces in
+     * Settings → Terminal so users opt in only when their shell supports
+     * it.
+     */
+    val terminalTapToPositionCursor: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[terminalTapToPositionCursorKey] ?: false
+    }
+
+    suspend fun setTerminalTapToPositionCursor(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[terminalTapToPositionCursorKey] = enabled
         }
     }
 

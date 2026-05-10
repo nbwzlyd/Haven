@@ -146,6 +146,7 @@ fun TerminalScreen(
     mouseInputEnabled: Boolean = true,
     mouseDragSelects: Boolean = true,
     terminalRightClick: Boolean = false,
+    tapToPositionCursorOnPrompt: Boolean = false,
     allowStandardKeyboard: Boolean = false,
     onToggleStandardKeyboard: () -> Unit = {},
     rawKeyboardMode: Boolean = false,
@@ -877,6 +878,7 @@ fun TerminalScreen(
                                 },
                                 gestureCallback = gestureCallback,
                                 keyboardMode = keyboardMode,
+                                tapToPositionCursorOnPrompt = tapToPositionCursorOnPrompt,
                             )
                         }
 

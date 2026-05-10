@@ -284,6 +284,9 @@ class SettingsViewModel @Inject constructor(
     val terminalRightClick: StateFlow<Boolean> = preferencesRepository.terminalRightClick
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    val terminalTapToPositionCursor: StateFlow<Boolean> = preferencesRepository.terminalTapToPositionCursor
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
     val allowStandardKeyboard: StateFlow<Boolean> = preferencesRepository.allowStandardKeyboard
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
@@ -453,6 +456,12 @@ class SettingsViewModel @Inject constructor(
     fun setTerminalRightClick(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.setTerminalRightClick(enabled)
+        }
+    }
+
+    fun setTerminalTapToPositionCursor(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setTerminalTapToPositionCursor(enabled)
         }
     }
 

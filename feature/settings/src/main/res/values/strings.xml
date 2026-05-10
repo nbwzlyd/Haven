@@ -57,6 +57,8 @@
     <string name="settings_font_size_subtitle">%1$dsp</string>
     <string name="settings_scrollback_rows_title">Scrollback rows</string>
     <string name="settings_scrollback_rows_subtitle">%1$,d lines retained per tab — applies to new tabs</string>
+    <string name="settings_tap_to_position_title">Tap to move cursor on supported prompts</string>
+    <string name="settings_tap_to_position_subtitle">Tap inside a shell prompt to move the cursor to that column. Requires OSC 133 prompt markers (starship, fish 3.6+, recent bash/zsh shell-integration setups). No effect on shells that don\'t emit them</string>
     <string name="settings_color_scheme_title">Terminal color scheme</string>
     <string name="settings_toolbar_title">Keyboard toolbar</string>
     <string name="settings_toolbar_subtitle">Configure toolbar keys and layout</string>
