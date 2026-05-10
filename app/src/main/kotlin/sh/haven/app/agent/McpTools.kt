@@ -1006,6 +1006,11 @@ internal class McpTools(
         if (p.reconnectMaxAttempts != 5) put("reconnectMaxAttempts", p.reconnectMaxAttempts)
         if (!p.reconnectOnNetworkChange) put("reconnectOnNetworkChange", false)
         if (p.tunnelOnly) put("tunnelOnly", true)
+        // Per-profile session manager (tmux / zellij / screen / null = bare
+        // shell). Surfaced so agents picking a clean-bash test target can
+        // filter on it without first connecting.
+        if (!p.sessionManager.isNullOrEmpty()) put("sessionManager", p.sessionManager)
+        if (p.disableAltScreen) put("disableAltScreen", true)
     }
 
     private fun listSessions(): JSONObject {
@@ -2140,7 +2145,36 @@ internal class McpTools(
         // Spin up the PTY without a UI tab on top so the agent can
         // immediately type into the session. Idempotent — a no-op if
         // the user already has a terminal tab open on this profile.
-        localSessionManager.startHeadlessShell(sessionId)
+        // Also tees the data stream into a TerminalEmulator and
+        // registers it with terminalSessionRegistry so the structured
+        // MCP tools (read_terminal_snapshot, tap_terminal,
+        // send_terminal_input) work against headless agent shells —
+        // not just sessions the user has visited in the Terminal tab
+        // (gap surfaced during v5.32.0-rc2 MCP testing). When a UI
+        // tab is later built for the same session, syncSessions skips
+        // it because LocalSession is already attached, so the
+        // registry's headless emulator stays the source of truth for
+        // agent reads.
+        if (terminalSessionRegistry.get(sessionId) == null) {
+            val agentEmulator = org.connectbot.terminal.TerminalEmulatorFactory.create(
+                initialRows = 24,
+                initialCols = 80,
+                onKeyboardInput = { data ->
+                    try {
+                        localSessionManager.sendInput(sessionId, String(data, Charsets.UTF_8))
+                    } catch (e: Exception) {
+                        // Session went away mid-write; agents recover via list_sessions.
+                    }
+                },
+                maxScrollbackLines = 1000,
+            )
+            localSessionManager.startHeadlessShell(sessionId) { data, off, len ->
+                agentEmulator.writeInput(data, off, len)
+            }
+            terminalSessionRegistry.register(sessionId, agentEmulator)
+        } else {
+            localSessionManager.startHeadlessShell(sessionId)
+        }
         JSONObject().apply {
             put("sessionId", sessionId)
             put("profileId", profile.id)

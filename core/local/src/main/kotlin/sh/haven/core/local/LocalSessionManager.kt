@@ -294,8 +294,17 @@ class LocalSessionManager @Inject constructor(
      * [readAgentScrollback] can return what the agent would see.
      * Idempotent — if a [LocalSession] already exists for [sessionId]
      * (e.g. the user opened a terminal tab for it), this is a no-op.
+     *
+     * [extraOnData], when non-null, is invoked for every chunk of PTY
+     * output alongside the agent scrollback ring. Lets a caller
+     * (notably the MCP `open_local_shell` handler) tee the stream
+     * into a [TerminalEmulator] without losing the byte-ring that
+     * `read_terminal_scrollback` consumes.
      */
-    fun startHeadlessShell(sessionId: String) {
+    fun startHeadlessShell(
+        sessionId: String,
+        extraOnData: ((ByteArray, Int, Int) -> Unit)? = null,
+    ) {
         val session = _sessions.value[sessionId] ?: return
         if (session.localSession != null) return
         val ring = agentScrollback.computeIfAbsent(sessionId) {
@@ -303,6 +312,7 @@ class LocalSessionManager @Inject constructor(
         }
         val onData: (ByteArray, Int, Int) -> Unit = { data, off, len ->
             ring.append(data, off, len)
+            extraOnData?.invoke(data, off, len)
         }
         val ls = createTerminalSession(sessionId, onData) ?: return
         // Default to a sensible PTY size; the UI will resize once a tab
