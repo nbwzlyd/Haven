@@ -21,6 +21,12 @@ data class ConnectionConfig(
      * — JSch's ChannelAgentForwarding silently skips identities whose `isEncrypted()` returns true.
      */
     val agentIdentities: List<Pair<String, ByteArray>> = emptyList(),
+    /**
+     * Per-profile reconnect policy (#150). Defaults preserve the prior
+     * always-on / 5-attempt-cap / honour-network-flip behaviour, so
+     * existing call sites that don't supply a policy keep working.
+     */
+    val reconnectPolicy: ReconnectPolicy = ReconnectPolicy(),
 ) {
     init {
         require(host.isNotBlank()) { "Host must not be blank" }
@@ -29,6 +35,23 @@ data class ConnectionConfig(
     }
 
     enum class AddressFamily { AUTO, IPV4_ONLY, IPV6_ONLY }
+
+    /**
+     * @param autoReconnect Whether to fire the backoff loop at all when
+     *   a transport drops. False = the session goes straight to
+     *   DISCONNECTED.
+     * @param maxAttempts Cap on the backoff loop. 0 means unlimited
+     *   (useful for tunnel-only profiles holding port forwards).
+     * @param onNetworkChange Whether the NetworkMonitor-driven
+     *   "WiFi/cellular/VPN flip" path should also trigger a reconnect.
+     *   Independent of [autoReconnect] so users can opt into one
+     *   without the other.
+     */
+    data class ReconnectPolicy(
+        val autoReconnect: Boolean = true,
+        val maxAttempts: Int = 5,
+        val onNetworkChange: Boolean = true,
+    )
 
     sealed interface AuthMethod {
         /** Password auth. Use [clear] to zero the password from memory after authentication. */

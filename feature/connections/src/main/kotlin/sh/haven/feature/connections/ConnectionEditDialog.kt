@@ -209,6 +209,16 @@ fun ConnectionEditDialog(
     // UserPreferencesRepository.TerminalColorScheme enum names.
     var terminalColorScheme by rememberSaveable { mutableStateOf(existing?.terminalColorScheme) }
     var showColorSchemeDialog by rememberSaveable { mutableStateOf(false) }
+    // Per-profile reconnect controls (#150). Defaults match the new
+    // ConnectionProfile column defaults so the dialog reads "as before"
+    // for existing profiles.
+    var autoReconnect by rememberSaveable { mutableStateOf(existing?.autoReconnect ?: true) }
+    var reconnectMaxAttempts by rememberSaveable {
+        mutableStateOf((existing?.reconnectMaxAttempts ?: 5).toString())
+    }
+    var reconnectOnNetworkChange by rememberSaveable {
+        mutableStateOf(existing?.reconnectOnNetworkChange ?: true)
+    }
 
     val isEdit = existing != null
     val title = if (isEdit) stringResource(R.string.connections_dialog_edit) else stringResource(R.string.connections_dialog_new)
@@ -1414,6 +1424,39 @@ fun ConnectionEditDialog(
                         )
                     }
 
+                    // Reconnect controls (#150). Defaults preserve current
+                    // behaviour: auto-reconnect on transport drop, 5
+                    // attempts, plus reconnect on network change. Users
+                    // who run noisy auth (the loop spammed during a wrong-
+                    // password phase) or who want indefinite retry on a
+                    // tunnel-only profile holding port forwards alive
+                    // (#150 Phase B) get the knobs here.
+                    Spacer(Modifier.height(8.dp))
+                    Text("Reconnect", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    FilterChip(
+                        selected = autoReconnect,
+                        onClick = { autoReconnect = !autoReconnect },
+                        label = { Text("Auto-reconnect on disconnect") },
+                    )
+                    if (autoReconnect) {
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = reconnectMaxAttempts,
+                            onValueChange = { v -> reconnectMaxAttempts = v.filter { c -> c.isDigit() }.take(4) },
+                            label = { Text("Max attempts (0 = unlimited)") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    FilterChip(
+                        selected = reconnectOnNetworkChange,
+                        onClick = { reconnectOnNetworkChange = !reconnectOnNetworkChange },
+                        label = { Text("Reconnect on network change") },
+                    )
+
                     // File transport picker — Auto / SFTP / SCP (legacy)
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -2211,6 +2254,9 @@ fun ConnectionEditDialog(
                             useAndroidShell = useAndroidShell,
                             forwardAgent = forwardAgent,
                             addressFamily = addressFamily,
+                            autoReconnect = autoReconnect,
+                            reconnectMaxAttempts = reconnectMaxAttempts.toIntOrNull()?.coerceAtLeast(0) ?: 5,
+                            reconnectOnNetworkChange = reconnectOnNetworkChange,
                             sessionManager = selectedSessionManager,
                             useMosh = selectedTransport == "MOSH",
                             useEternalTerminal = selectedTransport == "ET",

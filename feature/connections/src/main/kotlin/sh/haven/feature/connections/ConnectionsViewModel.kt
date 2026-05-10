@@ -1465,6 +1465,7 @@ class ConnectionsViewModel @Inject constructor(
                         forwardAgent = profile.forwardAgent,
                         addressFamily = profile.addressFamilyForSsh,
                         agentIdentities = agentIdentitiesFor(profile),
+                        reconnectPolicy = profile.reconnectPolicy,
                     )
 
                     // Proxy precedence: jump host > Route-through (tunnel /
@@ -1682,6 +1683,7 @@ class ConnectionsViewModel @Inject constructor(
                         forwardAgent = profile.forwardAgent,
                         addressFamily = profile.addressFamilyForSsh,
                         agentIdentities = agentIdentitiesFor(profile),
+                        reconnectPolicy = profile.reconnectPolicy,
                     )
 
                     val sshClient = SshClient().apply {
@@ -1814,6 +1816,7 @@ class ConnectionsViewModel @Inject constructor(
                         forwardAgent = profile.forwardAgent,
                         addressFamily = profile.addressFamilyForSsh,
                         agentIdentities = agentIdentitiesFor(profile),
+                        reconnectPolicy = profile.reconnectPolicy,
                     )
 
                     val sshClient = SshClient().apply {
@@ -2269,6 +2272,7 @@ class ConnectionsViewModel @Inject constructor(
                     authMethod = authMethod,
                     sshOptions = ConnectionConfig.parseSshOptions(jumpProfile.sshOptions),
                     addressFamily = jumpProfile.addressFamilyForSsh,
+                    reconnectPolicy = jumpProfile.reconnectPolicy,
                 )
                 Log.d(TAG, "Jump host SSH connecting...")
                 try {
@@ -3340,3 +3344,16 @@ class ConnectionsViewModel @Inject constructor(
  */
 private val ConnectionProfile.addressFamilyForSsh: ConnectionConfig.AddressFamily
     get() = ConnectionConfig.AddressFamily.valueOf(addressFamilyEnum.name)
+
+/**
+ * Per-profile reconnect knobs to a value object the SSH session
+ * manager understands. Three columns from the data model collapse
+ * into one [ConnectionConfig.ReconnectPolicy] — keeps the connect-
+ * config builders one line longer instead of three (#150).
+ */
+private val ConnectionProfile.reconnectPolicy: ConnectionConfig.ReconnectPolicy
+    get() = ConnectionConfig.ReconnectPolicy(
+        autoReconnect = autoReconnect,
+        maxAttempts = reconnectMaxAttempts,
+        onNetworkChange = reconnectOnNetworkChange,
+    )

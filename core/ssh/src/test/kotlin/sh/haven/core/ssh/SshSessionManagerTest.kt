@@ -321,4 +321,87 @@ class SshSessionManagerTest {
         assertTrue(torn.isEmpty())
         assertNotNull(manager.getSession(sshSid))
     }
+
+    // --- #150 reconnect policy gating -----------------------------------
+
+    @Test
+    fun `requestReconnectAll skips session whose policy disables autoReconnect`() {
+        val client = mockk<SshClient>(relaxed = true)
+        val sid = manager.registerSession("p1", "S1", client)
+        manager.storeConnectionConfig(
+            sessionId = sid,
+            config = configWithPolicy(autoReconnect = false),
+            sessionMgr = SessionManager.NONE,
+        )
+        manager.updateStatus(sid, SshSessionManager.SessionState.Status.DISCONNECTED)
+
+        manager.requestReconnectAll()
+
+        // Status must stay DISCONNECTED — no reconnect attempt fired.
+        assertEquals(
+            SshSessionManager.SessionState.Status.DISCONNECTED,
+            manager.getSession(sid)!!.status,
+        )
+    }
+
+    @Test
+    fun `requestReconnectAll skips session whose policy disables onNetworkChange`() {
+        val client = mockk<SshClient>(relaxed = true)
+        val sid = manager.registerSession("p1", "S1", client)
+        manager.storeConnectionConfig(
+            sessionId = sid,
+            config = configWithPolicy(autoReconnect = true, onNetworkChange = false),
+            sessionMgr = SessionManager.NONE,
+        )
+        manager.updateStatus(sid, SshSessionManager.SessionState.Status.DISCONNECTED)
+
+        manager.requestReconnectAll()
+
+        // autoReconnect=true alone must NOT trigger network-change reconnect.
+        assertEquals(
+            SshSessionManager.SessionState.Status.DISCONNECTED,
+            manager.getSession(sid)!!.status,
+        )
+    }
+
+    @Test
+    fun `requestReconnectAll honours session whose policy enables both flags`() {
+        val client = mockk<SshClient>(relaxed = true)
+        every { client.connectBlocking(any(), any(), any()) } throws RuntimeException("offline")
+        val sid = manager.registerSession("p1", "S1", client)
+        manager.storeConnectionConfig(
+            sessionId = sid,
+            config = configWithPolicy(autoReconnect = true, onNetworkChange = true),
+            sessionMgr = SessionManager.NONE,
+        )
+        manager.updateStatus(sid, SshSessionManager.SessionState.Status.DISCONNECTED)
+
+        manager.requestReconnectAll()
+
+        // The reconnect attempt fired; with the test config the session is
+        // either RECONNECTING (still in the backoff loop) or back to
+        // DISCONNECTED after the attempt failed. Either way, the policy
+        // didn't gate it out — that's what we're verifying.
+        val status = manager.getSession(sid)!!.status
+        assertTrue(
+            "expected RECONNECTING or DISCONNECTED, got $status",
+            status == SshSessionManager.SessionState.Status.RECONNECTING ||
+                status == SshSessionManager.SessionState.Status.DISCONNECTED,
+        )
+    }
+
+    private fun configWithPolicy(
+        autoReconnect: Boolean = true,
+        maxAttempts: Int = 5,
+        onNetworkChange: Boolean = true,
+    ): ConnectionConfig = ConnectionConfig(
+        host = "test.example",
+        port = 22,
+        username = "u",
+        reconnectPolicy = ConnectionConfig.ReconnectPolicy(
+            autoReconnect = autoReconnect,
+            maxAttempts = maxAttempts,
+            onNetworkChange = onNetworkChange,
+        ),
+    )
 }

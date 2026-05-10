@@ -141,6 +141,24 @@ data class ConnectionProfile(
      * scheme doesn't error.
      */
     val terminalColorScheme: String? = null,
+    /**
+     * Per-profile auto-reconnect controls (#150). Today the SSH session
+     * manager auto-reconnects unconditionally on transport drop with a
+     * hard-coded 5-attempt cap. These three columns expose that policy
+     * to users:
+     *
+     *  - [autoReconnect] gates the on-disconnect retry loop. Default
+     *    true preserves existing behaviour.
+     *  - [reconnectMaxAttempts] caps the loop. 0 means unlimited —
+     *    useful for tunnel-only profiles holding port forwards alive.
+     *  - [reconnectOnNetworkChange] gates the NetworkMonitor-driven
+     *    "WiFi/cellular flip → reconnect" path independently. Some
+     *    users want on-disconnect reconnect but not the network-flip
+     *    one (and vice versa).
+     */
+    val autoReconnect: Boolean = true,
+    val reconnectMaxAttempts: Int = 5,
+    val reconnectOnNetworkChange: Boolean = true,
 ) {
     enum class AuthType {
         PASSWORD,

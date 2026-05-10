@@ -212,9 +212,13 @@ class SshSessionManager @Inject constructor(
                 } else {
                     Log.d(TAG, "Session $sessionId disconnected unexpectedly")
                     val sess = _sessions.value[sessionId]
-                    if (sess?.connectionConfig != null) {
+                    val cfg = sess?.connectionConfig
+                    if (cfg != null && cfg.reconnectPolicy.autoReconnect) {
                         ioExecutor.execute { attemptReconnect(sessionId) }
                     } else {
+                        if (cfg != null) {
+                            Log.d(TAG, "Session $sessionId auto-reconnect disabled by profile policy")
+                        }
                         updateStatus(sessionId, SessionState.Status.DISCONNECTED)
                     }
                 }
@@ -334,11 +338,14 @@ class SshSessionManager @Inject constructor(
      */
     fun requestReconnectAll() {
         _sessions.value.forEach { (id, session) ->
-            if (session.status in listOf(SessionState.Status.DISCONNECTED, SessionState.Status.ERROR)
-                && session.connectionConfig != null
-            ) {
-                requestReconnect(id)
-            }
+            val cfg = session.connectionConfig ?: return@forEach
+            if (session.status !in listOf(SessionState.Status.DISCONNECTED, SessionState.Status.ERROR)) return@forEach
+            // #150: honour per-profile policy. Either toggle alone is
+            // enough to disable a network-change reconnect — both have
+            // to be on for the NetworkMonitor → reconnect path.
+            if (!cfg.reconnectPolicy.autoReconnect) return@forEach
+            if (!cfg.reconnectPolicy.onNetworkChange) return@forEach
+            requestReconnect(id)
         }
     }
 
@@ -363,15 +370,29 @@ class SshSessionManager @Inject constructor(
             }
         }
 
+        // #150: per-profile cap. 0 means unlimited (useful for tunnel-only
+        // profiles that hold port forwards alive). Negative values are
+        // treated as the legacy default; the data model schema rejects
+        // them but defensive code is cheap.
+        val maxAttempts = config.reconnectPolicy.maxAttempts
+        val unlimited = maxAttempts == 0
+        val attemptCap = when {
+            unlimited -> Int.MAX_VALUE
+            maxAttempts > 0 -> maxAttempts
+            else -> RECONNECT_MAX_ATTEMPTS
+        }
         var delayMs = RECONNECT_INITIAL_DELAY_MS
-        for (attempt in 1..RECONNECT_MAX_ATTEMPTS) {
+        var attempt = 0
+        while (attempt < attemptCap) {
+            attempt++
             // Check if session was removed (user manually disconnected)
             if (_sessions.value[sessionId] == null) {
                 Log.d(TAG, "Reconnect cancelled for $sessionId — session removed")
                 return
             }
 
-            Log.d(TAG, "Reconnect attempt $attempt/$RECONNECT_MAX_ATTEMPTS for $sessionId (delay ${delayMs}ms)")
+            val capLabel = if (unlimited) "∞" else "$attemptCap"
+            Log.d(TAG, "Reconnect attempt $attempt/$capLabel for $sessionId (delay ${delayMs}ms)")
             try {
                 Thread.sleep(delayMs)
             } catch (_: InterruptedException) {
@@ -451,7 +472,7 @@ class SshSessionManager @Inject constructor(
             }
         }
 
-        Log.d(TAG, "Reconnect failed after $RECONNECT_MAX_ATTEMPTS attempts for $sessionId")
+        Log.d(TAG, "Reconnect failed after $attempt attempts for $sessionId")
         updateStatus(sessionId, SessionState.Status.DISCONNECTED)
     }
 
