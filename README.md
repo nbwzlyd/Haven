@@ -122,14 +122,21 @@ Output: `app/build/outputs/apk/debug/haven-*-debug.apk`
 
 ## Backing
 
-Haven is built and maintained by one person. A small recurring amount
-comes in via [Ko-fi](https://ko-fi.com/glassontin) and
-[Liberapay](https://liberapay.com/GlassOnTin), which doesn't cover the
-development tooling — but it's appreciated, and a clear signal that
-people find the work useful.
+Haven sits on top of the projects listed in the table above — the heavy
+lifting was done long before this repo existed.
 
-The project will continue regardless of donations. I use Haven myself
-daily; I'd build it for that alone.
+Most of the direction Haven has taken has come from the user base, not
+from a roadmap: bug reports, screenshots of edge cases, "have you
+tried…" comments on long issue threads. Claude Code Opus writes most
+of the actual code; the maintainer's role is closer to that of a
+messenger between the user group and the model — listening, setting
+the agenda, and quality-checking.
+
+A small recurring amount comes in via [Ko-fi](https://ko-fi.com/glassontin)
+and [Liberapay](https://liberapay.com/GlassOnTin). It helps offset the
+Anthropic bills for the Claude Code usage above, and it's a clear
+signal that the work is useful to people. The project continues
+regardless of donations.
 
 ## License
 
