@@ -54,6 +54,7 @@ fun HavenTerminal(
     onPasteRequest: (() -> Unit)? = null,
     keyboardMode: HavenKeyboardMode = HavenKeyboardMode.Secure,
     tapToPositionCursorOnPrompt: Boolean = false,
+    onScrollControllerAvailable: ((org.connectbot.terminal.ScrollController) -> Unit)? = null,
 ) {
     Terminal(
         terminalEmulator = terminalEmulator,
@@ -92,5 +93,6 @@ fun HavenTerminal(
         onPasteShortcut = onPasteShortcut,
         onPasteRequest = onPasteRequest,
         tapToPositionCursorOnPrompt = tapToPositionCursorOnPrompt,
+        onScrollControllerAvailable = onScrollControllerAvailable,
     )
 }

@@ -68,6 +68,7 @@ internal class McpTools(
     private val workspaceLauncher: sh.haven.app.workspace.WorkspaceLauncher,
     private val tunnelConfigRepository: sh.haven.core.data.repository.TunnelConfigRepository,
     private val tunnelManager: sh.haven.core.tunnel.TunnelManager,
+    private val terminalSessionRegistry: sh.haven.feature.terminal.agent.TerminalSessionRegistry,
 ) {
 
     /**
@@ -316,6 +317,65 @@ internal class McpTools(
             consentLevel = ConsentLevel.NEVER,
         ) { args -> readTerminalScrollback(args) },
 
+        "read_terminal_snapshot" to ToolHandler(
+            description = "Return a structured snapshot of an active terminal session: dimensions, cursor row/col, terminal title, scrollback line count, and the visible-screen lines as plain text (with `softWrapped` flag per line, and optional OSC 133 semantic segments). Use list_sessions to discover sessionIds. Distinct from read_terminal_scrollback, which returns raw bytes; this is the parsed view useful for cursor-aware tooling and prompt detection.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Active session ID (from list_sessions). Must have an attached terminal tab.")
+                    })
+                    put("includeSemanticSegments", JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "If true, include each line's OSC 133 prompt-marker segments (PROMPT / COMMAND_INPUT / COMMAND_OUTPUT / COMMAND_FINISHED / ANNOTATION). Default false.")
+                    })
+                    put("maxLines", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Maximum number of visible-screen lines to include from the top. Default returns all visible rows. Cursor and dimensions are always present regardless.")
+                    })
+                })
+                put("required", JSONArray().put("sessionId"))
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> readTerminalSnapshot(args) },
+
+        "get_selection" to ToolHandler(
+            description = "Return the current text-selection state for an active terminal session: { active, mode (NONE/CHARACTER/WORD/LINE), range: { startRow, startCol, endRow, endCol } | null }. Reads termlib's SelectionController; valid only while the session has an attached terminal tab.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Active session ID with an attached terminal tab.")
+                    })
+                })
+                put("required", JSONArray().put("sessionId"))
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> getSelection(args) },
+
+        "read_clipboard" to ToolHandler(
+            description = "Return the system clipboard's primary plain-text content. Returns { text } where text is null when the clipboard is empty or non-text (image, intent, etc.). On Android 10+ the system enforces foreground/IME restrictions on clipboard reads; this call may return null even when the clipboard has content if Haven isn't currently focused.",
+            inputSchema = emptyObjectSchema(),
+            consentLevel = ConsentLevel.NEVER,
+        ) { _ -> readClipboard() },
+
+        "get_preference" to ToolHandler(
+            description = "Read a Haven user preference by key. Whitelisted keys: terminal_scrollback_rows, terminal_tap_to_position_cursor, terminal_font_size, terminal_color_scheme, mouse_input_enabled, mouse_drag_selects, terminal_right_click. Returns { key, value } where value's type follows the preference's type (int / boolean / string).",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("key", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Preference key (see whitelist in description).")
+                    })
+                })
+                put("required", JSONArray().put("key"))
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> getPreference(args) },
+
         // --- Write tools (require consent) ------------------------------
 
         "disconnect_profile" to ToolHandler(
@@ -460,6 +520,118 @@ internal class McpTools(
                 "Send to terminal: \"$visible\"?"
             },
         ) { args -> sendTerminalInput(args) },
+
+        "write_clipboard" to ToolHandler(
+            description = "Set the system clipboard's primary plain-text content. Replaces whatever's currently on the clipboard. Useful for priming the clipboard before triggering a terminal paste.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("text", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Text to place on the clipboard. Empty string is allowed and clears the clipboard's primary item.")
+                    })
+                })
+                put("required", JSONArray().put("text"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                val text = args.optString("text", "")
+                val preview = if (text.length > 80) text.substring(0, 80) + "…" else text
+                val visible = preview.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+                "Replace clipboard with: \"$visible\"?"
+            },
+        ) { args -> writeClipboard(args) },
+
+        "set_preference" to ToolHandler(
+            description = "Write a Haven user preference. Whitelisted keys (and their types): terminal_scrollback_rows (int 100..25000), terminal_tap_to_position_cursor (bool), terminal_font_size (int 8..32), mouse_input_enabled (bool), mouse_drag_selects (bool), terminal_right_click (bool). Returns { key, value }.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("key", JSONObject().apply { put("type", "string"); put("description", "Preference key (see whitelist).") })
+                    put("value", JSONObject().apply { put("description", "New value. Type must match the key's type — int for the *_rows / *_size keys, bool for the rest.") })
+                })
+                put("required", JSONArray().put("key").put("value"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args -> "Set Haven preference ${args.optString("key")} = ${args.opt("value")}?" },
+        ) { args -> setPreference(args) },
+
+        "start_selection" to ToolHandler(
+            description = "Anchor a new text selection at (row, col) in an active terminal session. Equivalent to a long-press at that cell. Modes: CHARACTER (default), WORD (snaps to word boundaries on creation), LINE (whole-row selection). Subsequent extend_selection / copy_selection / clear_selection calls on the same session operate on this anchor. Replaces any existing selection on this session.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID with an attached terminal tab.") })
+                    put("row", JSONObject().apply { put("type", "integer"); put("description", "Viewport-relative row, 0 = top.") })
+                    put("col", JSONObject().apply { put("type", "integer"); put("description", "Column, 0 = leftmost.") })
+                    put("mode", JSONObject().apply { put("type", "string"); put("description", "CHARACTER | WORD | LINE. Default CHARACTER.") })
+                })
+                put("required", JSONArray().put("sessionId").put("row").put("col"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args -> "Start ${args.optString("mode", "CHARACTER")} selection at row=${args.optInt("row")} col=${args.optInt("col")}?" },
+        ) { args -> startSelection(args) },
+
+        "extend_selection" to ToolHandler(
+            description = "Move the selection's end anchor to (row, col) in an active terminal session. Equivalent to dragging the selection handle to that cell. Pairs with start_selection — call start_selection first to set the anchor, then extend_selection to move the far end.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID.") })
+                    put("row", JSONObject().apply { put("type", "integer"); put("description", "Viewport-relative row, 0 = top.") })
+                    put("col", JSONObject().apply { put("type", "integer"); put("description", "Column, 0 = leftmost.") })
+                })
+                put("required", JSONArray().put("sessionId").put("row").put("col"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args -> "Extend selection to row=${args.optInt("row")} col=${args.optInt("col")}?" },
+        ) { args -> extendSelection(args) },
+
+        "copy_selection" to ToolHandler(
+            description = "Copy the current selection to the system clipboard and return the copied text. Goes through Haven's smart-copy interceptor (TUI border-strip + soft-wrap rejoin). Clears the selection after copying. Returns { text }.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID with a current selection.") })
+                })
+                put("required", JSONArray().put("sessionId"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { _ -> "Copy current terminal selection to clipboard?" },
+        ) { args -> copySelection(args) },
+
+        "tap_terminal" to ToolHandler(
+            description = "Simulate a tap inside an active terminal session at (row, col). When the user has Settings → Terminal → Tap to move cursor on supported prompts enabled, and the tap lands on a row carrying an OSC 133 COMMAND_INPUT segment with no matching COMMAND_FINISHED, Haven dispatches arrow keys so the readline cursor lands at the tapped column. Returns { handled, deltaCols, dispatched } describing what happened. handled=false means no OSC 133 prompt at the tap row — falls through silently.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID.") })
+                    put("row", JSONObject().apply { put("type", "integer"); put("description", "Viewport-relative row.") })
+                    put("col", JSONObject().apply { put("type", "integer"); put("description", "Column.") })
+                })
+                put("required", JSONArray().put("sessionId").put("row").put("col"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args -> "Tap terminal at row=${args.optInt("row")} col=${args.optInt("col")}?" },
+        ) { args -> tapTerminal(args) },
+
+        "scroll_terminal" to ToolHandler(
+            description = "Scroll an active terminal session's viewport by N lines. Positive lines = back into scrollback (older content); negative lines = toward the live screen. Clamps at 0 (live) and scrollback.size. Returns { scrollbackPosition } — the new position after clamping.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID with an attached terminal tab.") })
+                    put("lines", JSONObject().apply { put("type", "integer"); put("description", "Lines to scroll. Positive = into scrollback, negative = toward live.") })
+                })
+                put("required", JSONArray().put("sessionId").put("lines"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                val n = args.optInt("lines")
+                if (n >= 0) "Scroll terminal $n lines into scrollback?"
+                else "Scroll terminal ${-n} lines toward live screen?"
+            },
+        ) { args -> scrollTerminal(args) },
 
         "open_developer_settings" to ToolHandler(
             description = "Open Android's Developer Options screen via ACTION_APPLICATION_DEVELOPMENT_SETTINGS so the user can flip Wireless debugging or other developer toggles. Tap-equivalent — the screen opens but no setting is changed without the user touching it.",
@@ -1436,6 +1608,270 @@ internal class McpTools(
             put("profileId", profileId)
             put("path", path)
             put("deleted", true)
+        }
+    }
+
+    // --- Terminal snapshot / selection / clipboard / preference helpers ---
+
+    private fun requireRegistryEntry(sessionId: String): sh.haven.feature.terminal.agent.TerminalSessionRegistry.Entry {
+        if (sessionId.isEmpty()) throw McpError(-32602, "Missing required argument: sessionId")
+        return terminalSessionRegistry.get(sessionId)
+            ?: throw McpError(-32603, "No registered terminal tab for session $sessionId — open a terminal tab on this session first")
+    }
+
+    private fun readTerminalSnapshot(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val includeSegs = args.optBoolean("includeSemanticSegments", false)
+        val maxLines = if (args.has("maxLines")) args.optInt("maxLines", Int.MAX_VALUE) else Int.MAX_VALUE
+        val snap = entry.emulator.buildAgentSnapshot(
+            includeSemanticSegments = includeSegs,
+            maxLines = maxLines,
+        )
+        val scrollPos = entry.scrollController?.scrollbackPosition ?: 0
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("rows", snap.rows)
+            put("cols", snap.cols)
+            put("cursorRow", snap.cursorRow)
+            put("cursorCol", snap.cursorCol)
+            put("cursorVisible", snap.cursorVisible)
+            put("terminalTitle", snap.terminalTitle)
+            put("scrollbackSize", snap.scrollbackSize)
+            put("scrollbackPosition", scrollPos)
+            put("lines", JSONArray().apply {
+                snap.lines.forEach { line ->
+                    put(JSONObject().apply {
+                        put("text", line.text)
+                        put("softWrapped", line.softWrapped)
+                        if (includeSegs) {
+                            put("semanticSegments", JSONArray().apply {
+                                line.semanticSegments.forEach { seg ->
+                                    put(JSONObject().apply {
+                                        put("startCol", seg.startCol)
+                                        put("endCol", seg.endCol)
+                                        put("type", seg.type)
+                                        put("promptId", seg.promptId)
+                                        if (seg.metadata != null) put("metadata", seg.metadata)
+                                    })
+                                }
+                            })
+                        }
+                    })
+                }
+            })
+        }
+    }
+
+    private fun getSelection(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val controller = entry.selectionController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController — the tab may not be the foreground tab")
+        val range = controller.getSelectionRange()
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("active", controller.isSelectionActive)
+            put("range", if (range == null) JSONObject.NULL else JSONObject().apply {
+                put("startRow", range.startRow)
+                put("startCol", range.startCol)
+                put("endRow", range.endRow)
+                put("endCol", range.endCol)
+            })
+        }
+    }
+
+    private fun readClipboard(): JSONObject {
+        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+        val clip = cm?.primaryClip
+        val text = if (clip != null && clip.itemCount > 0) {
+            clip.getItemAt(0).coerceToText(context)?.toString()
+        } else null
+        return JSONObject().apply {
+            put("text", text ?: JSONObject.NULL)
+        }
+    }
+
+    private fun writeClipboard(args: JSONObject): JSONObject {
+        val text = args.optString("text", "")
+        val cm = context.getSystemService(android.content.ClipboardManager::class.java)
+            ?: throw McpError(-32603, "ClipboardManager unavailable on this device")
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("haven-mcp", text))
+        return JSONObject().apply {
+            put("bytesWritten", text.toByteArray(Charsets.UTF_8).size)
+        }
+    }
+
+    private val preferenceWhitelist = setOf(
+        "terminal_scrollback_rows",
+        "terminal_tap_to_position_cursor",
+        "terminal_font_size",
+        "mouse_input_enabled",
+        "mouse_drag_selects",
+        "terminal_right_click",
+    )
+
+    private suspend fun getPreference(args: JSONObject): JSONObject {
+        val key = args.optString("key").ifEmpty {
+            throw McpError(-32602, "Missing required argument: key")
+        }
+        if (key !in preferenceWhitelist) {
+            throw McpError(-32602, "Preference $key is not in the whitelist")
+        }
+        val value: Any = when (key) {
+            "terminal_scrollback_rows" -> preferencesRepository.terminalScrollbackRows.first()
+            "terminal_tap_to_position_cursor" -> preferencesRepository.terminalTapToPositionCursor.first()
+            "terminal_font_size" -> preferencesRepository.terminalFontSize.first()
+            "mouse_input_enabled" -> preferencesRepository.mouseInputEnabled.first()
+            "mouse_drag_selects" -> preferencesRepository.mouseDragSelects.first()
+            "terminal_right_click" -> preferencesRepository.terminalRightClick.first()
+            else -> throw McpError(-32602, "Preference $key is not in the whitelist")
+        }
+        return JSONObject().apply {
+            put("key", key)
+            put("value", value)
+        }
+    }
+
+    private suspend fun setPreference(args: JSONObject): JSONObject {
+        val key = args.optString("key").ifEmpty {
+            throw McpError(-32602, "Missing required argument: key")
+        }
+        if (key !in preferenceWhitelist) {
+            throw McpError(-32602, "Preference $key is not in the whitelist")
+        }
+        if (!args.has("value")) throw McpError(-32602, "Missing required argument: value")
+        val rawValue = args.opt("value")
+        when (key) {
+            "terminal_scrollback_rows" -> {
+                val v = (rawValue as? Number)?.toInt() ?: throw McpError(-32602, "value must be an integer for $key")
+                preferencesRepository.setTerminalScrollbackRows(v)
+            }
+            "terminal_font_size" -> {
+                val v = (rawValue as? Number)?.toInt() ?: throw McpError(-32602, "value must be an integer for $key")
+                preferencesRepository.setTerminalFontSize(v)
+            }
+            "terminal_tap_to_position_cursor" -> {
+                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
+                preferencesRepository.setTerminalTapToPositionCursor(v)
+            }
+            "mouse_input_enabled" -> {
+                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
+                preferencesRepository.setMouseInputEnabled(v)
+            }
+            "mouse_drag_selects" -> {
+                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
+                preferencesRepository.setMouseDragSelects(v)
+            }
+            "terminal_right_click" -> {
+                val v = rawValue as? Boolean ?: throw McpError(-32602, "value must be a boolean for $key")
+                preferencesRepository.setTerminalRightClick(v)
+            }
+        }
+        return JSONObject().apply {
+            put("key", key)
+            put("value", rawValue)
+        }
+    }
+
+    private fun parseSelectionMode(s: String?): org.connectbot.terminal.SelectionMode = when (s?.uppercase()) {
+        null, "", "CHARACTER" -> org.connectbot.terminal.SelectionMode.CHARACTER
+        "WORD" -> org.connectbot.terminal.SelectionMode.WORD
+        "LINE" -> org.connectbot.terminal.SelectionMode.LINE
+        "NONE" -> org.connectbot.terminal.SelectionMode.NONE
+        else -> throw McpError(-32602, "Unknown selection mode: $s")
+    }
+
+    private fun startSelection(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val controller = entry.selectionController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
+        val row = args.optInt("row", -1).also { if (it < 0) throw McpError(-32602, "row must be >= 0") }
+        val col = args.optInt("col", -1).also { if (it < 0) throw McpError(-32602, "col must be >= 0") }
+        val mode = parseSelectionMode(args.optString("mode", "CHARACTER"))
+        controller.setSelectionMode(mode)
+        controller.startSelection(mode)
+        controller.updateSelectionStart(row, col)
+        controller.updateSelectionEnd(row, col)
+        val range = controller.getSelectionRange()
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("active", controller.isSelectionActive)
+            put("range", range?.let {
+                JSONObject().apply {
+                    put("startRow", it.startRow); put("startCol", it.startCol)
+                    put("endRow", it.endRow); put("endCol", it.endCol)
+                }
+            } ?: JSONObject.NULL)
+        }
+    }
+
+    private fun extendSelection(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val controller = entry.selectionController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
+        val row = args.optInt("row", -1).also { if (it < 0) throw McpError(-32602, "row must be >= 0") }
+        val col = args.optInt("col", -1).also { if (it < 0) throw McpError(-32602, "col must be >= 0") }
+        controller.updateSelectionEnd(row, col)
+        val range = controller.getSelectionRange()
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("range", range?.let {
+                JSONObject().apply {
+                    put("startRow", it.startRow); put("startCol", it.startCol)
+                    put("endRow", it.endRow); put("endCol", it.endCol)
+                }
+            } ?: JSONObject.NULL)
+        }
+    }
+
+    private fun copySelection(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val controller = entry.selectionController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
+        val text = controller.copySelection()
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("text", text)
+        }
+    }
+
+    private fun tapTerminal(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val row = args.optInt("row", -1).also { if (it < 0) throw McpError(-32602, "row must be >= 0") }
+        val col = args.optInt("col", -1).also { if (it < 0) throw McpError(-32602, "col must be >= 0") }
+        val beforeCol = entry.emulator.buildAgentSnapshot().cursorCol
+        val handled = entry.emulator.tapToPositionCursorOnPrompt(row, col)
+        val afterCol = entry.emulator.buildAgentSnapshot().cursorCol
+        val deltaCols = afterCol - beforeCol
+        val dispatched = when {
+            !handled -> "NONE"
+            deltaCols < 0 -> "LEFT"
+            deltaCols > 0 -> "RIGHT"
+            else -> "NONE"
+        }
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("handled", handled)
+            put("deltaCols", deltaCols)
+            put("dispatched", dispatched)
+        }
+    }
+
+    private fun scrollTerminal(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val scrollController = entry.scrollController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active ScrollController")
+        val lines = if (args.has("lines")) args.optInt("lines") else throw McpError(-32602, "Missing required argument: lines")
+        scrollController.scrollBy(lines)
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("scrollbackPosition", scrollController.scrollbackPosition)
         }
     }
 

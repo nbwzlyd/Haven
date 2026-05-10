@@ -49,6 +49,7 @@ class TerminalViewModelTest {
             mockk(relaxed = true),
             sh.haven.core.data.agent.AgentUiCommandBus(),
             mockk(relaxed = true),
+            sh.haven.feature.terminal.agent.TerminalSessionRegistry(),
         )
     }
 

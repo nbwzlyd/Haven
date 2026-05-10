@@ -281,6 +281,13 @@ class TerminalViewModel @Inject constructor(
      * destination choice.
      */
     val attachCoordinator: sh.haven.feature.sftp.attach.TerminalAttachCoordinator,
+    /**
+     * Singleton index of live terminal handles by sessionId. Populated
+     * on tab creation here and on selection/scroll controller hook from
+     * [TerminalScreen]; consumed by the MCP agent transport so it can
+     * inspect / drive the terminal without going through a Compose scope.
+     */
+    val terminalSessionRegistry: sh.haven.feature.terminal.agent.TerminalSessionRegistry,
 ) : ViewModel() {
 
     /**
@@ -1238,6 +1245,20 @@ class TerminalViewModel @Inject constructor(
         }
 
         _tabs.value = currentTabs
+
+        // Mirror tab → registry so the MCP agent can find each tab's
+        // emulator by sessionId. Selection / scroll controllers come in
+        // separately from the Compose layer's onXxxControllerAvailable
+        // callbacks (see TerminalScreen.kt).
+        val liveIds = currentTabs.map { it.sessionId }.toSet()
+        for (tab in currentTabs) {
+            if (terminalSessionRegistry.get(tab.sessionId) == null) {
+                terminalSessionRegistry.register(tab.sessionId, tab.emulator)
+            }
+        }
+        for (id in terminalSessionRegistry.sessions.value.keys.toList()) {
+            if (id !in liveIds) terminalSessionRegistry.unregister(id)
+        }
 
         // Clamp active index
         if (_activeTabIndex.value >= currentTabs.size && currentTabs.isNotEmpty()) {

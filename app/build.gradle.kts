@@ -125,6 +125,11 @@ dependencies {
     implementation(project(":core:local"))
     implementation(project(":core:wayland"))
     implementation(project(":core:terminal-haven"))
+    // Direct termlib pull-in so the MCP agent transport can name termlib
+    // public types (TerminalEmulator, ScrollController, SelectionController,
+    // SelectionRange, AgentSnapshot) by class. core:terminal-haven uses
+    // `implementation(libs.termlib)` so the dependency doesn't leak.
+    implementation(libs.termlib)
     implementation(project(":core:stepca"))
     implementation(project(":core:tunnel"))
 

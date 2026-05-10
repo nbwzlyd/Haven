@@ -854,7 +854,13 @@ fun TerminalScreen(
                                 modifierManager = modifierManager,
                                 onPasteShortcut = pasteShortcut,
                                 onPasteRequest = doPaste,
-                                onSelectionControllerAvailable = { selectionController = it },
+                                onSelectionControllerAvailable = {
+                                    selectionController = it
+                                    viewModel.terminalSessionRegistry.setSelectionController(activeTab.sessionId, it)
+                                },
+                                onScrollControllerAvailable = {
+                                    viewModel.terminalSessionRegistry.setScrollController(activeTab.sessionId, it)
+                                },
                                 onTerminalDoubleTap = {
                                     val window = (view.context as? Activity)?.window ?: return@HavenTerminal
                                     val controller = WindowCompat.getInsetsController(window, view)
