@@ -585,7 +585,7 @@ internal class McpTools(
         ) { args -> startSelection(args) },
 
         "extend_selection" to ToolHandler(
-            description = "Move the selection's end anchor to (row, col) in an active terminal session. Equivalent to dragging the selection handle to that cell. Pairs with start_selection — call start_selection first to set the anchor, then extend_selection to move the far end.",
+            description = "Move the selection's end anchor to (row, col) in an active terminal session. Equivalent to dragging the selection handle to that cell. Pairs with start_selection — call start_selection first to set the anchor, then extend_selection to move the far end. Does NOT scroll the viewport — use drag_selection_to to extend a selection past the top or bottom of the viewport into scrollback.",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -601,6 +601,24 @@ internal class McpTools(
             consentLevel = ConsentLevel.ONCE_PER_SESSION,
             summarise = { args -> "Extend selection to row=${args.optInt("row")} col=${args.optInt("col")}?" },
         ) { args -> extendSelection(args) },
+
+        "drag_selection_to" to ToolHandler(
+            description = "Drag the selection's end anchor toward (toRow, toCol), auto-scrolling the viewport into scrollback (or back toward live) when toRow lies outside [0, rows-1]. Mirrors the Compose drag gesture that runs when the finger crosses the top or bottom edge zone: each row of out-of-viewport target is one ScrollController.scrollBy(±1) paired with one shiftSelectionStartByRows(±1) in lockstep. toRow < 0 scrolls back |toRow| rows (end anchor lands at viewport row 0). toRow >= rows scrolls forward toRow-(rows-1) rows (end anchor lands at viewport row rows-1). toRow in [0, rows-1] is equivalent to extend_selection. Clamps at the live screen and at scrollback.size; the response's `clamped` field indicates whether the full requested distance was achieved. Returns the resolved selection range, the new scrollbackPosition, the number of scroll steps actually taken (signed), the clamp flag, and the selection text via SelectionController.getSelectedText (libvterm softWrapped-aware, scrollback-aware).",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID with an attached terminal tab.") })
+                    put("toRow", JSONObject().apply { put("type", "integer"); put("description", "Target row. May be negative (above viewport top — drag into scrollback) or >= rows (below viewport bottom — drag toward live).") })
+                    put("toCol", JSONObject().apply { put("type", "integer"); put("description", "Target column.") })
+                })
+                put("required", JSONArray().put("sessionId").put("toRow").put("toCol"))
+            },
+            // Same rationale as start_selection / extend_selection — pure
+            // UI-state moves, the clipboard-touching follow-up gates
+            // separately on copy_selection.
+            consentLevel = ConsentLevel.ONCE_PER_SESSION,
+            summarise = { args -> "Drag selection toward row=${args.optInt("toRow")} col=${args.optInt("toCol")} (scrolls viewport into scrollback as needed)?" },
+        ) { args -> dragSelectionTo(args) },
 
         "copy_selection" to ToolHandler(
             description = "Copy the current selection to the system clipboard and return the copied text. Goes through Haven's smart-copy interceptor (TUI border-strip + soft-wrap rejoin). Clears the selection after copying. Returns { text }.",
@@ -682,10 +700,18 @@ internal class McpTools(
         ) { _ -> enableWirelessAdb() },
 
         "open_local_shell" to ToolHandler(
-            description = "Open a fresh local Alpine PRoot shell session and return its sessionId. Equivalent to tapping the Terminal icon in the Connections top bar — creates the local shell profile if missing, registers a session, and connects it. The returned sessionId is immediately usable with send_terminal_input and read_terminal_scrollback. Use this when you need a clean bash REPL (e.g. when an existing session has Claude Code, vim, or another stdin-capturing process in front of it).",
-            inputSchema = emptyObjectSchema(),
+            description = "Open a fresh local Alpine PRoot shell session and return its sessionId. Equivalent to tapping the Terminal icon in the Connections top bar — creates the local shell profile if missing, registers a session, and connects it. The returned sessionId is immediately usable with send_terminal_input and read_terminal_scrollback. Use this when you need a clean bash REPL (e.g. when an existing session has Claude Code, vim, or another stdin-capturing process in front of it). Pass `plain: true` to bypass the user's session-manager preference (tmux / zellij / screen / byobu) and exec a bare login shell — required when the agent needs Haven's own scrollback ring to capture output, which doesn't happen when a multiplexer's status bar uses DECSTBM to reserve the bottom row. NOTE: if a live local shell already exists, this returns that sessionId regardless of `plain` (response `reused: true`); call disconnect_profile on the existing profile first if you need a fresh plain-shell respawn.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("plain", JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Skip the user's sessionManager preference and exec /bin/busybox sh -l directly. Default false (UI-equivalent behaviour).")
+                    })
+                })
+            },
             consentLevel = ConsentLevel.NEVER,
-        ) { _ -> openLocalShell() },
+        ) { args -> openLocalShell(args) },
 
         "set_terminal_font_from_url" to ToolHandler(
             description = "Download a TTF/OTF font from a URL, validate it, install it as Haven's terminal font (replacing any prior custom font), and return the saved path. Useful for agent-driven Nerd Font installs (#123). Requires the URL to be reachable from the device — use a tunneled URL (via add_port_forward LOCAL) to expose a workstation HTTP server back through the existing SSH session.",
@@ -1868,7 +1894,13 @@ internal class McpTools(
         val row = args.optInt("row", -1).also { if (it < 0) throw McpError(-32602, "row must be >= 0") }
         val col = args.optInt("col", -1).also { if (it < 0) throw McpError(-32602, "col must be >= 0") }
         val mode = parseSelectionMode(args.optString("mode", "CHARACTER"))
-        controller.setSelectionMode(mode)
+        // The Compose-side SelectionController.startSelection short-circuits
+        // when `selectionManager.mode != NONE` (so the gesture handler can't
+        // re-anchor while a selection is already up). Mirror "replaces any
+        // existing selection on this session" by clearing first; then
+        // startSelection(mode) sets both mode and an initial range, and
+        // updateSelectionStart/End move it to the caller's (row, col).
+        controller.clearSelection()
         controller.startSelection(mode)
         controller.updateSelectionStart(row, col)
         controller.updateSelectionEnd(row, col)
@@ -1902,6 +1934,83 @@ internal class McpTools(
                     put("endRow", it.endRow); put("endCol", it.endCol)
                 }
             } ?: JSONObject.NULL)
+        }
+    }
+
+    private fun dragSelectionTo(args: JSONObject): JSONObject {
+        val sessionId = args.optString("sessionId")
+        val entry = requireRegistryEntry(sessionId)
+        val selection = entry.selectionController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
+        val scroll = entry.scrollController
+            ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active ScrollController")
+        if (!args.has("toRow")) throw McpError(-32602, "Missing required argument: toRow")
+        if (!args.has("toCol")) throw McpError(-32602, "Missing required argument: toCol")
+        val toRow = args.optInt("toRow")
+        val toCol = args.optInt("toCol")
+        if (toCol < 0) throw McpError(-32602, "toCol must be >= 0")
+        val rows = entry.emulator.dimensions.rows
+        // Translate the requested logical row into a viewport-anchored
+        // endpoint plus a signed step count. The Compose gesture handler
+        // does this implicitly because the pointer reports a Y position;
+        // MCP works in logical rows so the agent can request "drag 30
+        // rows into scrollback" without knowing the viewport height.
+        //
+        // Sign convention here matches scroll_terminal: positive steps =
+        // scroll back into older content (so a finger at the top edge
+        // dragging UP into scrollback is positive); negative = scroll
+        // forward toward the live screen. Each step is one row of scroll
+        // paired with one shiftSelectionStartByRows of the same sign.
+        val (clampedRow, requestedSteps) = when {
+            toRow < 0 -> 0 to (-toRow)                          // into scrollback
+            toRow >= rows -> (rows - 1) to (rows - 1 - toRow)   // toward live
+            else -> toRow to 0
+        }
+        var actualSteps = 0
+        var clamped = false
+        if (requestedSteps != 0) {
+            val stepDirection = if (requestedSteps > 0) +1 else -1
+            val totalSteps = kotlin.math.abs(requestedSteps)
+            // Read the clamp threshold from the emulator's live agent
+            // snapshot rather than the ScrollController's `maxScrollback`
+            // property. The controller reads through the Compose-side
+            // `screenState`, which only refreshes on recomposition — for
+            // sessions whose tab isn't currently the foreground (the
+            // typical agent-shell case), the cached scrollback size lags
+            // the underlying emulator by an arbitrary amount.
+            // `buildAgentSnapshot` reads the same `_snapshot.value`
+            // that's updated on every processPendingUpdates(), so it's
+            // authoritative even when the Compose subtree is paused.
+            val maxScrollback = entry.emulator.buildAgentSnapshot(maxLines = 0).scrollbackSize
+            repeat(totalSteps) {
+                val canStep = if (stepDirection > 0) {
+                    scroll.scrollbackPosition < maxScrollback
+                } else {
+                    scroll.scrollbackPosition > 0
+                }
+                if (!canStep) {
+                    clamped = true
+                    return@repeat
+                }
+                scroll.scrollBy(stepDirection)
+                selection.shiftSelectionStartByRows(stepDirection)
+                actualSteps += stepDirection
+            }
+        }
+        selection.updateSelectionEnd(clampedRow, toCol)
+        val range = selection.getSelectionRange()
+        return JSONObject().apply {
+            put("sessionId", sessionId)
+            put("range", range?.let {
+                JSONObject().apply {
+                    put("startRow", it.startRow); put("startCol", it.startCol)
+                    put("endRow", it.endRow); put("endCol", it.endCol)
+                }
+            } ?: JSONObject.NULL)
+            put("scrollbackPosition", scroll.scrollbackPosition)
+            put("scrollSteps", actualSteps)
+            put("clamped", clamped)
+            put("text", selection.getSelectedText())
         }
     }
 
@@ -2168,7 +2277,8 @@ internal class McpTools(
         }
     }
 
-    private suspend fun openLocalShell(): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun openLocalShell(args: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
+        val plain = args.optBoolean("plain", false)
         // Find or seed the canonical "Local Shell" profile, mirroring
         // ConnectionsViewModel.connectLocalTerminal so the agent and
         // the user reach the same place. We deliberately do NOT trigger
@@ -2229,6 +2339,7 @@ internal class McpTools(
         // registry's headless emulator stays the source of truth for
         // agent reads.
         if (terminalSessionRegistry.get(sessionId) == null) {
+            val scrollbackRows = preferencesRepository.terminalScrollbackRows.first()
             val agentEmulator = org.connectbot.terminal.TerminalEmulatorFactory.create(
                 initialRows = 24,
                 initialCols = 80,
@@ -2239,7 +2350,16 @@ internal class McpTools(
                         // Session went away mid-write; agents recover via list_sessions.
                     }
                 },
-                maxScrollbackLines = 1000,
+                onResize = { dims ->
+                    // When a UI tab adopts this headless session, HavenTerminal
+                    // sizes the emulator from the Compose canvas — propagate
+                    // that to the underlying PTY so `clear`/nano/etc. see the
+                    // real viewport. Looking the LocalSession up each call
+                    // tolerates the chicken-and-egg between emulator creation
+                    // and startHeadlessShell.
+                    localSessionManager.getActiveSession(sessionId)?.resize(dims.columns, dims.rows)
+                },
+                maxScrollbackLines = scrollbackRows,
             )
             // writeInput must happen on the main looper — libvterm's
             // OSC dispatch is wired against the same thread that
@@ -2248,19 +2368,26 @@ internal class McpTools(
             // (notably 133 prompt markers and OSC 2 title). Mirroring
             // EmulatorWriteBuffer's main-thread post pattern.
             val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-            localSessionManager.startHeadlessShell(sessionId) { data, off, len ->
-                val copy = data.copyOfRange(off, off + len)
-                mainHandler.post { agentEmulator.writeInput(copy, 0, copy.size) }
-            }
+            localSessionManager.startHeadlessShell(
+                sessionId,
+                extraOnData = { data, off, len ->
+                    val copy = data.copyOfRange(off, off + len)
+                    mainHandler.post { agentEmulator.writeInput(copy, 0, copy.size) }
+                },
+                plain = plain,
+            )
             terminalSessionRegistry.register(sessionId, agentEmulator)
         } else {
-            localSessionManager.startHeadlessShell(sessionId)
+            // No-op when an existing LocalSession is attached, regardless of
+            // the original plain choice — see LocalSessionManager.startHeadlessShell.
+            localSessionManager.startHeadlessShell(sessionId, plain = plain)
         }
         JSONObject().apply {
             put("sessionId", sessionId)
             put("profileId", profile.id)
             put("label", profile.label)
             put("reused", alive != null)
+            put("plain", plain)
         }
     }
 

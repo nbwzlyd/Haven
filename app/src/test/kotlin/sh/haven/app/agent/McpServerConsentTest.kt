@@ -66,6 +66,11 @@ class McpServerConsentTest {
             transportSelector = mockk<sh.haven.feature.sftp.transport.TransportSelector>(relaxed = true),
             workspaceRepository = mockk<sh.haven.core.data.repository.WorkspaceRepository>(relaxed = true),
             workspaceLauncher = mockk<sh.haven.app.workspace.WorkspaceLauncher>(relaxed = true),
+            tunnelConfigRepository = mockk<sh.haven.core.data.repository.TunnelConfigRepository>(relaxed = true),
+            tunnelManager = mockk<sh.haven.core.tunnel.TunnelManager>(relaxed = true),
+            terminalSessionRegistry = sh.haven.feature.terminal.agent.TerminalSessionRegistry(),
+            portKnocker = mockk<sh.haven.core.knock.PortKnocker>(relaxed = true),
+            connectionLogRepository = mockk<sh.haven.core.data.repository.ConnectionLogRepository>(relaxed = true),
         )
         return server to auditRecorder
     }

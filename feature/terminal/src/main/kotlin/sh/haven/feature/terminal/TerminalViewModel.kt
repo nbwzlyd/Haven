@@ -1188,6 +1188,55 @@ class TerminalViewModel @Inject constructor(
         // Create tabs for new Local sessions
         for (sessionId in activeLocalIds) {
             if (sessionId in trackedSessionIds) continue
+
+            // Adoption path: the MCP agent's `open_local_shell` may already
+            // have started a headless LocalSession and registered its
+            // TerminalEmulator with [terminalSessionRegistry]. In that case
+            // [isReadyForTerminal] is false (a PTY is attached) and we
+            // can't legally re-create the session. Reuse the existing
+            // emulator + LocalSession so the UI tab presents the same byte
+            // stream the agent sees, and so this tab's HavenTerminal mounts
+            // the SelectionController / ScrollController the agent transport
+            // needs for `start_selection` / `drag_selection_to` to operate.
+            //
+            // OSC 7 / OSC 8 / mouse-mode tracking are not retroactively
+            // wired — the LocalSession's onDataReceived callback was set
+            // when the agent started it headlessly and can't be teed into
+            // additional handlers here. libvterm's native OSC 133 dispatch
+            // still works because that runs inside the adopted emulator.
+            val existingHeadless = localSessionManager.getActiveSession(sessionId)
+            val agentRegistryEntry = if (existingHeadless != null) terminalSessionRegistry.get(sessionId) else null
+            if (existingHeadless != null && agentRegistryEntry != null) {
+                val session = localSessions[sessionId] ?: continue
+                val tabLabel = generateTabLabel(session.label, session.profileId, currentTabs)
+                val localProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+                val localScheme = effectiveColorScheme(localProfile)
+                currentTabs.add(
+                    TerminalTab(
+                        sessionId = session.sessionId,
+                        profileId = session.profileId,
+                        colorTag = localProfile?.colorTag ?: 0,
+                        label = tabLabel,
+                        transportType = "LOCAL",
+                        emulator = agentRegistryEntry.emulator,
+                        mouseMode = MutableStateFlow(false),
+                        activeMouseMode = MutableStateFlow(null),
+                        bracketPasteMode = MutableStateFlow(false),
+                        oscHandler = OscHandler(),
+                        cwd = MutableStateFlow(null),
+                        hyperlinkUri = MutableStateFlow(null),
+                        isReconnecting = MutableStateFlow(false),
+                        secondsUntilDisconnect = NEVER_STALLS,
+                        sendInput = { data -> existingHeadless.sendInput(data) },
+                        resize = { cols, rows -> existingHeadless.resize(cols, rows) },
+                        close = { existingHeadless.close() },
+                        colorScheme = localScheme,
+                    )
+                )
+                trackedSessionIds.add(sessionId)
+                continue
+            }
+
             if (!localSessionManager.isReadyForTerminal(sessionId)) continue
 
             val session = localSessions[sessionId] ?: continue

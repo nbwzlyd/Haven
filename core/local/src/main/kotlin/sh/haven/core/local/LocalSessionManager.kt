@@ -117,8 +117,15 @@ class LocalSessionManager @Inject constructor(
      * instead of leaving the user with a dead PTY. The wrapper `exec`s
      * the session-manager binary so signals (SIGWINCH, SIGHUP) reach
      * tmux directly, not through an intermediate sh.
+     *
+     * When [plain] is true the user's `sessionManager` preference is
+     * ignored entirely and a bare login shell is execed — needed for
+     * agent-driven test sessions that depend on Haven's own scrollback
+     * ring being filled (which a multiplexer's DECSTBM-based status bar
+     * defeats).
      */
-    private fun sessionManagerShellArgs(sessionName: String): Array<String> {
+    private fun sessionManagerShellArgs(sessionName: String, plain: Boolean = false): Array<String> {
+        if (plain) return arrayOf("/bin/busybox", "sh", "-l")
         val mgr = sessionManager
         val template = mgr.command
         if (template == null) {
@@ -138,8 +145,12 @@ class LocalSessionManager @Inject constructor(
     /**
      * Build the shell command for a local session.
      * Uses proot if a rootfs is installed, otherwise falls back to /system/bin/sh.
+     *
+     * When [plain] is true the session-manager wrapper (tmux/zellij/screen/byobu)
+     * is skipped and a bare login shell is execed — see
+     * [sessionManagerShellArgs].
      */
-    fun buildCommand(useAndroidShell: Boolean = false): Triple<String, Array<String>, Array<String>> {
+    fun buildCommand(useAndroidShell: Boolean = false, plain: Boolean = false): Triple<String, Array<String>, Array<String>> {
         val prootBinary = prootManager.prootBinary
 
         return if (!useAndroidShell && prootBinary != null && prootManager.isRootfsInstalled) {
@@ -157,7 +168,7 @@ class LocalSessionManager @Inject constructor(
             // plain login shell if the binary isn't installed in the
             // rootfs, so picking tmux without `apk add tmux` degrades
             // to today's behaviour rather than failing the session.
-            val shellArgs: Array<String> = sessionManagerShellArgs("haven-local")
+            val shellArgs: Array<String> = sessionManagerShellArgs("haven-local", plain = plain)
             val args = arrayOf(
                 prootBinary,
                 "-0",                    // fake root
@@ -206,12 +217,13 @@ class LocalSessionManager @Inject constructor(
         onDataReceived: (ByteArray, Int, Int) -> Unit,
         rows: Int = 24,
         cols: Int = 80,
+        plain: Boolean = false,
     ): LocalSession? {
         val session = _sessions.value[sessionId] ?: return null
         if (session.status != SessionState.Status.CONNECTED) return null
         if (session.localSession != null) return null
 
-        val (cmd, args, env) = buildCommand(session.useAndroidShell)
+        val (cmd, args, env) = buildCommand(session.useAndroidShell, plain = plain)
 
         val localSession = LocalSession(
             sessionId = sessionId,
@@ -240,6 +252,16 @@ class LocalSessionManager @Inject constructor(
         return session.status == SessionState.Status.CONNECTED &&
             session.localSession == null
     }
+
+    /**
+     * The live [LocalSession] for [sessionId], or null if none is attached.
+     * Distinct from [isReadyForTerminal]: this returns the session that's
+     * *already* attached (e.g. an agent-side headless shell started by
+     * `open_local_shell`), letting the UI tab adopt it instead of forking
+     * a second PTY for the same session.
+     */
+    fun getActiveSession(sessionId: String): LocalSession? =
+        _sessions.value[sessionId]?.localSession
 
     fun detachTerminalSession(sessionId: String) {
         val session = _sessions.value[sessionId] ?: return
@@ -304,6 +326,7 @@ class LocalSessionManager @Inject constructor(
     fun startHeadlessShell(
         sessionId: String,
         extraOnData: ((ByteArray, Int, Int) -> Unit)? = null,
+        plain: Boolean = false,
     ) {
         val session = _sessions.value[sessionId] ?: return
         if (session.localSession != null) return
@@ -314,7 +337,7 @@ class LocalSessionManager @Inject constructor(
             ring.append(data, off, len)
             extraOnData?.invoke(data, off, len)
         }
-        val ls = createTerminalSession(sessionId, onData) ?: return
+        val ls = createTerminalSession(sessionId, onData, plain = plain) ?: return
         // Default to a sensible PTY size; the UI will resize once a tab
         // attaches. 80x24 keeps line wrapping predictable for an agent
         // that's about to do `printf` glyph tests.
