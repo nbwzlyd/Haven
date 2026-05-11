@@ -727,16 +727,26 @@ class DesktopViewModel @Inject constructor(
      * so it survives any composable subtree recreation that happens
      * when the conditional tab-bar in DesktopScreen comes/goes during
      * an orientation change — that recreation reset a Composable-
-     * local `remember` state to its initial value (Landscape) and
-     * the LaunchedEffect immediately wrote Landscape back, so the
-     * lock never took effect.
+     * local `remember` state to its initial value and the
+     * LaunchedEffect immediately wrote that back, so the lock never
+     * took effect.
+     *
+     * Default is UNSPECIFIED (auto / follow system) so the Desktop
+     * tab behaves like its neighbours when no desktop session is
+     * active and the user hasn't explicitly chosen landscape —
+     * the previous LANDSCAPE default rotated the activity as soon
+     * as the user landed on the empty Desktop tab, breaking the
+     * left/right swipe-to-change-tab gesture for anyone using
+     * Haven without a desktop connection. Users who want landscape
+     * cycle to it via the orientation toolbar button.
      *
      * Values are the raw `ActivityInfo.SCREEN_ORIENTATION_*`
      * constants since the enum is private to feature modules. Cycle
-     * order matches the toolbar button: Landscape -> Portrait -> Auto.
+     * order from the toolbar button: Auto -> Landscape -> Portrait
+     * -> Auto.
      */
     private val _desktopOrientation = MutableStateFlow(
-        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     )
     val desktopOrientation: StateFlow<Int> = _desktopOrientation.asStateFlow()
 
