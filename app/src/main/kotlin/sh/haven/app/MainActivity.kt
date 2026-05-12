@@ -8,6 +8,7 @@ import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -159,6 +160,12 @@ class MainActivity : AppCompatActivity() {
 
             val themeMode by preferencesRepository.theme
                 .collectAsState(initial = UserPreferencesRepository.ThemeMode.SYSTEM)
+            // Mirror the user's choice to AppCompatDelegate so the next
+            // cold-launch splash window matches without waiting for the
+            // Application to re-read DataStore (#153 follow-up).
+            LaunchedEffect(themeMode) {
+                AppCompatDelegate.setDefaultNightMode(themeMode.toNightMode())
+            }
             val darkTheme = when (themeMode) {
                 UserPreferencesRepository.ThemeMode.LIGHT -> false
                 UserPreferencesRepository.ThemeMode.DARK -> true

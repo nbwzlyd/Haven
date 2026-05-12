@@ -1,6 +1,7 @@
 package sh.haven.app
 
 import android.app.Application
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
@@ -8,8 +9,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.runBlocking
+import sh.haven.core.data.preferences.UserPreferencesRepository
 import sh.haven.core.stepca.CertRenewalWorker
 import java.io.File
 import javax.inject.Inject
@@ -18,7 +22,7 @@ import javax.inject.Inject
 class HavenApp : Application(), Configuration.Provider {
 
     @Inject lateinit var mcpServer: sh.haven.app.agent.McpServer
-    @Inject lateinit var preferencesRepository: sh.haven.core.data.preferences.UserPreferencesRepository
+    @Inject lateinit var preferencesRepository: UserPreferencesRepository
     @Inject lateinit var workspaceShortcutManager: sh.haven.app.workspace.WorkspaceShortcutManager
     @Inject lateinit var workerFactory: HiltWorkerFactory
 
@@ -39,6 +43,19 @@ class HavenApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Apply the saved theme override to AppCompatDelegate before any
+        // activity is created, so the cold-launch splash window uses the
+        // user's chosen mode rather than only the system uiMode (#153).
+        // Synchronous DataStore read is intentional here — must happen
+        // before the first activity, and the cost is bounded.
+        val savedMode = try {
+            runBlocking { preferencesRepository.theme.first() }
+        } catch (_: Exception) {
+            UserPreferencesRepository.ThemeMode.SYSTEM
+        }
+        AppCompatDelegate.setDefaultNightMode(savedMode.toNightMode())
+
         // Register Shizuku binder listeners early so the async callback
         // has time to fire before any UI checks isShizukuAvailable().
         sh.haven.core.local.WaylandSocketHelper.initShizukuListeners()
@@ -113,4 +130,10 @@ class HavenApp : Application(), Configuration.Provider {
             // Best-effort cleanup
         }
     }
+}
+
+internal fun UserPreferencesRepository.ThemeMode.toNightMode(): Int = when (this) {
+    UserPreferencesRepository.ThemeMode.LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
+    UserPreferencesRepository.ThemeMode.DARK -> AppCompatDelegate.MODE_NIGHT_YES
+    UserPreferencesRepository.ThemeMode.SYSTEM -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
 }
