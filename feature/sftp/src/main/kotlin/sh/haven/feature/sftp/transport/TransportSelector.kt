@@ -83,9 +83,9 @@ class TransportSelector @Inject constructor(
     }
 
     private fun resolveSftp(profile: ConnectionProfile): RemoteFileTransport? {
-        val channel = sessionManager.openSftpForProfile(profile.id) ?: return null
+        val session = sessionManager.openSftpSession(profile.id) ?: return null
         val ssh = sessionManager.getSshClientForProfile(profile.id)
-        return SftpTransport({ channel }, ssh)
+        return SftpTransport({ session }, ssh)
     }
 
     private fun resolveScp(profile: ConnectionProfile): RemoteFileTransport? {

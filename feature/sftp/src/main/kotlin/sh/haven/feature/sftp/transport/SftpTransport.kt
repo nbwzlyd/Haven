@@ -1,68 +1,63 @@
 package sh.haven.feature.sftp.transport
 
-import com.jcraft.jsch.ChannelSftp
-import com.jcraft.jsch.SftpProgressMonitor
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import sh.haven.core.ssh.SshClient
+import sh.haven.core.ssh.sftp.ListResult
+import sh.haven.core.ssh.sftp.SftpSession
 import sh.haven.feature.sftp.SftpEntry
 
 /**
- * [RemoteFileTransport] backed by JSch's SFTP channel. A thin wrapper that
- * lifts the channel operations out of SftpViewModel so the view model's
- * SSH code path becomes transport-agnostic.
+ * [RemoteFileTransport] backed by Haven's [SftpSession] facade over the
+ * underlying SSH SFTP channel. A thin adapter that lifts the SFTP operations
+ * out of SftpViewModel so the view model's SSH code path stays
+ * transport-agnostic.
  *
  * [sshClient] is optional — it is only consulted for [chown], which
- * needs a shell exec channel because JSch's `ChannelSftp.chown` requires
- * a numeric UID and users usually want to chown by name.
+ * needs a shell exec channel because SFTP's chown requires a numeric UID
+ * and users usually want to chown by name.
  */
 class SftpTransport(
-    private val channelProvider: () -> ChannelSftp,
+    private val sessionProvider: () -> SftpSession,
     private val sshClient: SshClient? = null,
 ) : RemoteFileTransport {
 
     override val label: String = "SFTP"
 
-    override suspend fun list(path: String): List<SftpEntry> = withContext(Dispatchers.IO) {
-        val channel = channelProvider()
+    override suspend fun list(path: String): List<SftpEntry> {
+        val session = sessionProvider()
         val results = mutableListOf<SftpEntry>()
         val symlinkIndices = mutableListOf<Int>()
-        channel.ls(path) { lsEntry ->
-            val name = lsEntry.filename
-            if (name != "." && name != "..") {
-                val attrs = lsEntry.attrs
-                val fullPath = path.trimEnd('/') + "/" + name
-                if (attrs.isLink) symlinkIndices.add(results.size)
-                results.add(
-                    SftpEntry(
-                        name = name,
-                        path = fullPath,
-                        isDirectory = attrs.isDir,
-                        size = attrs.size,
-                        modifiedTime = attrs.mTime.toLong(),
-                        permissions = attrs.permissionsString ?: "",
-                        // JSch reports UID/GID as integers — no name lookup over
-                        // the SFTP subsystem. Users can still type a name in
-                        // the chown dialog; the server resolves it.
-                        owner = attrs.uId.toString(),
-                        group = attrs.gId.toString(),
-                    )
-                )
-            }
-            ChannelSftp.LsEntrySelector.CONTINUE
+        session.list(path) { attrs ->
+            val fullPath = path.trimEnd('/') + "/" + attrs.filename
+            if (attrs.isSymlink) symlinkIndices.add(results.size)
+            results.add(
+                SftpEntry(
+                    name = attrs.filename,
+                    path = fullPath,
+                    isDirectory = attrs.isDirectory,
+                    size = attrs.size,
+                    modifiedTime = attrs.modifiedTimeSeconds.toLong(),
+                    permissions = attrs.permissions,
+                    // SFTP reports UID/GID as integers — no name lookup over
+                    // the subsystem. Users can still type a name in the chown
+                    // dialog; the server resolves it.
+                    owner = attrs.uid.toString(),
+                    group = attrs.gid.toString(),
+                ),
+            )
+            ListResult.CONTINUE
         }
-        // Resolve symlinks AFTER ls() completes — calling stat() inside the ls
-        // callback corrupts JSch's read buffer (interleaved SFTP requests).
+        // Resolve symlinks AFTER list() completes — calling stat() inside the
+        // list callback corrupts the SFTP read buffer (interleaved requests).
         for (i in symlinkIndices) {
             try {
-                if (channel.stat(results[i].path).isDir) {
+                if (session.stat(results[i].path).isDirectory) {
                     results[i] = results[i].copy(isDirectory = true)
                 }
             } catch (_: Exception) {
                 // broken symlink or permission denied
             }
         }
-        results
+        return results
     }
 
     override suspend fun upload(
@@ -70,26 +65,8 @@ class SftpTransport(
         sizeHint: Long,
         destPath: String,
         onBytes: (Long, Long) -> Unit,
-    ) = withContext(Dispatchers.IO) {
-        val channel = channelProvider()
-        val monitor = object : SftpProgressMonitor {
-            private var total = 0L
-            private var transferred = 0L
-            override fun init(op: Int, src: String, dest: String, max: Long) {
-                total = if (max == SftpProgressMonitor.UNKNOWN_SIZE) sizeHint else max
-                transferred = 0
-                onBytes(0, total)
-            }
-            override fun count(bytes: Long): Boolean {
-                transferred += bytes
-                onBytes(transferred, total)
-                return true
-            }
-            override fun end() {
-                onBytes(total, total)
-            }
-        }
-        channel.put(input, destPath, monitor)
+    ) {
+        sessionProvider().upload(input, sizeHint, destPath, onBytes)
     }
 
     override suspend fun download(
@@ -97,66 +74,48 @@ class SftpTransport(
         output: java.io.OutputStream,
         sizeHint: Long,
         onBytes: (Long, Long) -> Unit,
-    ) = withContext(Dispatchers.IO) {
-        val channel = channelProvider()
-        val monitor = object : SftpProgressMonitor {
-            private var total = 0L
-            private var transferred = 0L
-            override fun init(op: Int, src: String, dest: String, max: Long) {
-                total = if (max == SftpProgressMonitor.UNKNOWN_SIZE) sizeHint else max
-                transferred = 0
-                onBytes(0, total)
-            }
-            override fun count(bytes: Long): Boolean {
-                transferred += bytes
-                onBytes(transferred, total)
-                return true
-            }
-            override fun end() {
-                onBytes(total, total)
-            }
-        }
-        channel.get(srcPath, output, monitor)
+    ) {
+        // sizeHint is unused — the SFTP server reports the actual size via
+        // SFTP_FXP_ATTRS during the open(); SftpSession surfaces it through
+        // the (transferred, total) callback.
+        sessionProvider().download(srcPath, output, onBytes)
     }
 
     /**
-     * Direct streaming download via JSch's `get(path, monitor, skip)`
-     * overload. Used by [SftpStreamServer]'s opener and by the MCP
-     * `serve_file` tool — both want a fresh InputStream at an arbitrary
-     * byte offset without the [download] callback overhead.
+     * Direct streaming download at an arbitrary byte offset. Used by
+     * [SftpStreamServer]'s opener and the MCP `serve_file` tool — both
+     * want a fresh InputStream without the [download] progress overhead.
      */
     override suspend fun openInputStream(path: String, offset: Long): java.io.InputStream =
-        withContext(Dispatchers.IO) {
-            channelProvider().get(path, null as SftpProgressMonitor?, offset)
-        }
+        sessionProvider().openInputStream(path, offset)
 
-    override suspend fun stat(path: String): SftpEntry = withContext(Dispatchers.IO) {
-        val attrs = channelProvider().stat(path)
-        SftpEntry(
-            name = path.substringAfterLast('/').ifEmpty { path },
+    override suspend fun stat(path: String): SftpEntry {
+        val attrs = sessionProvider().stat(path)
+        return SftpEntry(
+            name = attrs.filename,
             path = path,
-            isDirectory = attrs.isDir,
+            isDirectory = attrs.isDirectory,
             size = attrs.size,
-            modifiedTime = attrs.mTime.toLong(),
-            permissions = attrs.permissionsString.orEmpty(),
+            modifiedTime = attrs.modifiedTimeSeconds.toLong(),
+            permissions = attrs.permissions,
         )
     }
 
-    override suspend fun mkdir(path: String) = withContext(Dispatchers.IO) {
-        channelProvider().mkdir(path)
+    override suspend fun mkdir(path: String) {
+        sessionProvider().mkdir(path)
     }
 
-    override suspend fun rename(from: String, to: String) = withContext(Dispatchers.IO) {
-        channelProvider().rename(from, to)
+    override suspend fun rename(from: String, to: String) {
+        sessionProvider().rename(from, to)
     }
 
-    override suspend fun delete(path: String, isDirectory: Boolean) = withContext(Dispatchers.IO) {
-        val channel = channelProvider()
-        if (isDirectory) channel.rmdir(path) else channel.rm(path)
+    override suspend fun delete(path: String, isDirectory: Boolean) {
+        val session = sessionProvider()
+        if (isDirectory) session.rmdir(path) else session.rm(path)
     }
 
-    override suspend fun chmod(path: String, mode: Int) = withContext(Dispatchers.IO) {
-        channelProvider().chmod(mode, path)
+    override suspend fun chmod(path: String, mode: Int) {
+        sessionProvider().chmod(path, mode)
     }
 
     override suspend fun chown(path: String, owner: String) {
