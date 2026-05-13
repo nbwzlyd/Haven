@@ -32,7 +32,7 @@ import sh.haven.core.data.db.entities.WorkspaceProfile
         WorkspaceItem::class,
         StepCaConfig::class,
     ],
-    version = 52,
+    version = 53,
     exportSchema = true,
 )
 abstract class HavenDatabase : RoomDatabase() {
@@ -763,6 +763,22 @@ abstract class HavenDatabase : RoomDatabase() {
                 addColumnIfMissing(
                     db, "connection_profiles", "portKnockDelayMs",
                     "INTEGER NOT NULL DEFAULT 100",
+                )
+            }
+        }
+
+        /**
+         * Cloudflare Tunnel as an SSH transport (#154). Adds
+         * `ownerProfileId` to `tunnel_configs`: when non-null, the row is
+         * owned by a single SSH profile and hidden from the standalone
+         * Tunnels list. ConnectionRepository cascade-deletes by
+         * ownerProfileId on profile delete.
+         */
+        val MIGRATION_52_53 = object : Migration(52, 53) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                addColumnIfMissing(
+                    db, "tunnel_configs", "ownerProfileId",
+                    "TEXT DEFAULT NULL",
                 )
             }
         }

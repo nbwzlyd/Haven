@@ -150,6 +150,7 @@
     <string name="connections_field_post_login">Post-login command</string>
     <string name="connections_helper_post_login">Sent after login.</string>
     <string name="connections_dropdown_none_direct">None (direct)</string>
+    <string name="connections_dropdown_cloudflare_tunnel">Cloudflare Tunnel</string>
     <string name="connections_dropdown_default_none">Default (None)</string>
     <string name="connections_dropdown_none">None</string>
     <string name="connections_section_file_transport">File transport</string>

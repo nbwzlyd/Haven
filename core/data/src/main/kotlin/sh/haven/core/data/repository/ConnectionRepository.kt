@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import sh.haven.core.data.db.ConnectionDao
+import sh.haven.core.data.db.TunnelConfigDao
 import sh.haven.core.data.db.entities.ConnectionProfile
 import sh.haven.core.security.CredentialEncryption
 import javax.inject.Inject
@@ -16,6 +17,7 @@ import javax.inject.Singleton
 @Singleton
 class ConnectionRepository @Inject constructor(
     private val connectionDao: ConnectionDao,
+    private val tunnelConfigDao: TunnelConfigDao,
     @ApplicationContext private val context: Context,
 ) {
     init {
@@ -45,7 +47,10 @@ class ConnectionRepository @Inject constructor(
     suspend fun save(profile: ConnectionProfile) =
         connectionDao.upsert(encryptPasswords(profile))
 
-    suspend fun delete(id: String) = connectionDao.deleteById(id)
+    suspend fun delete(id: String) {
+        tunnelConfigDao.deleteByOwner(id)
+        connectionDao.deleteById(id)
+    }
 
     suspend fun markConnected(id: String) = connectionDao.updateLastConnected(id)
 

@@ -35,8 +35,15 @@ class TunnelViewModel @Inject constructor(
 
     /**
      * Result of a [testCloudflareAccess] call, surfaced inline next to
-     * the "Test connection" button.
+     * the "Test connection" button. Typealiased to the top-level
+     * [CloudflareTunnelTestResult] so the same composable
+     * ([CloudflareInlineFields]) renders results produced either here
+     * or in another ViewModel (the SSH profile editor, GH #154).
      */
+    @Deprecated(
+        "Use CloudflareTunnelTestResult directly",
+        ReplaceWith("CloudflareTunnelTestResult", "sh.haven.feature.tunnel.CloudflareTunnelTestResult"),
+    )
     sealed class CloudflareAccessTestResult {
         data object Idle : CloudflareAccessTestResult()
         data object Running : CloudflareAccessTestResult()
@@ -44,13 +51,13 @@ class TunnelViewModel @Inject constructor(
         data class Failure(val message: String) : CloudflareAccessTestResult()
     }
 
-    private val _cfTestResult = MutableStateFlow<CloudflareAccessTestResult>(
-        CloudflareAccessTestResult.Idle,
+    private val _cfTestResult = MutableStateFlow<CloudflareTunnelTestResult>(
+        CloudflareTunnelTestResult.Idle,
     )
-    val cfTestResult: StateFlow<CloudflareAccessTestResult> = _cfTestResult.asStateFlow()
+    val cfTestResult: StateFlow<CloudflareTunnelTestResult> = _cfTestResult.asStateFlow()
 
     fun resetCfTestResult() {
-        _cfTestResult.value = CloudflareAccessTestResult.Idle
+        _cfTestResult.value = CloudflareTunnelTestResult.Idle
     }
 
     /**
@@ -77,12 +84,12 @@ class TunnelViewModel @Inject constructor(
             .removePrefix("http://")
             .substringBefore('/')
         if (trimmedHost.isEmpty()) {
-            _cfTestResult.value = CloudflareAccessTestResult.Failure(
+            _cfTestResult.value = CloudflareTunnelTestResult.Failure(
                 "Hostname required to test the Cloudflare Tunnel connection",
             )
             return
         }
-        _cfTestResult.value = CloudflareAccessTestResult.Running
+        _cfTestResult.value = CloudflareTunnelTestResult.Running
         viewModelScope.launch {
             val syntheticId = "cf-tunnel-test:$trimmedHost"
             val started = System.currentTimeMillis()
@@ -107,7 +114,7 @@ class TunnelViewModel @Inject constructor(
                 } else {
                     "Cloudflare Tunnel reachable; WebSocket upgrade succeeded with Access JWT."
                 }
-                _cfTestResult.value = CloudflareAccessTestResult.Success(msg)
+                _cfTestResult.value = CloudflareTunnelTestResult.Success(msg)
                 connectionLogRepository.logEvent(
                     profileId = syntheticId,
                     status = ConnectionLog.Status.CONNECTED,
@@ -116,7 +123,7 @@ class TunnelViewModel @Inject constructor(
                 )
             } catch (e: Throwable) {
                 val msg = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
-                _cfTestResult.value = CloudflareAccessTestResult.Failure(msg)
+                _cfTestResult.value = CloudflareTunnelTestResult.Failure(msg)
                 connectionLogRepository.logEvent(
                     profileId = syntheticId,
                     status = ConnectionLog.Status.FAILED,
@@ -127,7 +134,12 @@ class TunnelViewModel @Inject constructor(
         }
     }
 
-    val tunnels: StateFlow<List<TunnelConfig>> = repository.observeAll()
+    /**
+     * Standalone tunnels only — Cloudflare Tunnels embedded on an SSH
+     * profile (GH #154) are hidden from this list; the user manages those
+     * through the SSH profile editor.
+     */
+    val tunnels: StateFlow<List<TunnelConfig>> = repository.observeStandalone()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val _error = MutableStateFlow<String?>(null)

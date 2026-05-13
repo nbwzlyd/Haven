@@ -68,9 +68,15 @@ import androidx.compose.ui.text.input.PlatformImeOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.runtime.collectAsState
+import androidx.hilt.navigation.compose.hiltViewModel
 import sh.haven.core.data.db.entities.ConnectionProfile
 import sh.haven.core.data.preferences.UserPreferencesRepository
 import sh.haven.core.knock.KnockSequence
+import sh.haven.feature.tunnel.CloudflareAccessLoginContract
+import sh.haven.feature.tunnel.CloudflareInlineFields
+import sh.haven.feature.tunnel.TunnelViewModel
 
 /** Profile group colors — matches PROFILE_COLORS in ConnectionsScreen. */
 private val EDIT_DIALOG_COLORS = listOf(
@@ -96,10 +102,19 @@ fun ConnectionEditDialog(
     sshKeys: List<sh.haven.core.data.db.entities.SshKey> = emptyList(),
     tunnelConfigs: List<sh.haven.core.data.db.entities.TunnelConfig> = emptyList(),
     /**
+     * The Cloudflare Tunnel transport row owned by [existing], if any
+     * (GH #154). When non-null, the SSH profile editor renders inline CF
+     * fields pre-populated from the decrypted blob; when null, the user
+     * can opt in by picking "Cloudflare Tunnel" in the route-through
+     * dropdown.
+     */
+    embeddedCloudflareTunnel: sh.haven.core.data.db.entities.TunnelConfig? = null,
+    /**
      * Opens the Tunnels screen. When the preselect is non-null, the
      * destination should auto-open its Add dialog with that type
-     * pre-selected. Used by the Route-through dropdown's "+ New X tunnel"
-     * quick-add affordances; "Manage tunnels…" passes null.
+     * pre-selected. Used by the Route-through dropdown's quick-add
+     * affordances; "Manage tunnels…" passes null. CLOUDFLARE_ACCESS is
+     * never passed any more — that route lives inline on the profile.
      */
     onManageTunnels: ((preselect: sh.haven.core.data.db.entities.TunnelConfigType?) -> Unit)? = null,
     globalSessionManagerLabel: String = "None",
@@ -114,7 +129,14 @@ fun ConnectionEditDialog(
      *  hidden — useful for previews / tests. */
     onTestKnock: (suspend (host: String, sequence: String, delayMs: Int) -> Pair<Boolean, String>)? = null,
     onDismiss: () -> Unit,
-    onSave: (ConnectionProfile) -> Unit,
+    /**
+     * Save callback. The second argument carries inline Cloudflare Tunnel
+     * transport state (GH #154); non-null means "save the profile and
+     * upsert a hidden tunnel row owned by it", null means "save the
+     * profile and drop any embedded tunnel previously owned by it".
+     * Wired via [ConnectionsViewModel.saveProfileWithEmbeddedCloudflareTunnel].
+     */
+    onSave: (ConnectionProfile, EmbeddedCloudflareTunnelInput?) -> Unit,
 ) {
     // Transport dropdown maps to: connectionType + useMosh + useEternalTerminal
     val initialTransport = when {
@@ -193,6 +215,35 @@ fun ConnectionEditDialog(
     var proxyPort by rememberSaveable { mutableStateOf(existing?.proxyPort?.toString() ?: "1080") }
     var keyId by rememberSaveable { mutableStateOf(existing?.keyId) }
     var tunnelConfigId by rememberSaveable { mutableStateOf(existing?.tunnelConfigId) }
+
+    // Cloudflare Tunnel transport (GH #154). When `useCloudflareTunnel`
+    // is true the SSH profile uses an embedded `TunnelConfig` whose
+    // `ownerProfileId` matches this profile. The hostname mirrors the
+    // SSH `host` field, so the inline form skips a duplicate hostname
+    // input. Initial state comes from the decoded embedded blob (if any);
+    // otherwise the user opts in by picking "Cloudflare Tunnel" in the
+    // route-through dropdown.
+    val initialCfBlob = remember(embeddedCloudflareTunnel?.id) {
+        embeddedCloudflareTunnel?.configText?.let {
+            runCatching { sh.haven.core.tunnel.CloudflareAccessConfigBlob.parse(it) }.getOrNull()
+        }
+    }
+    var useCloudflareTunnel by rememberSaveable {
+        mutableStateOf(initialCfBlob != null)
+    }
+    var cfTeamDomain by rememberSaveable { mutableStateOf(initialCfBlob?.teamDomain ?: "") }
+    var cfJwt by rememberSaveable { mutableStateOf(initialCfBlob?.jwt ?: "") }
+    var cfExpiresAt by rememberSaveable { mutableStateOf(initialCfBlob?.jwtExpiresAt ?: 0L) }
+    var cfJumpDestination by rememberSaveable { mutableStateOf(initialCfBlob?.jumpDestination ?: "") }
+    var cfAdvancedOpen by rememberSaveable {
+        mutableStateOf(
+            initialCfBlob != null && (
+                initialCfBlob.teamDomain.isNotBlank() ||
+                    initialCfBlob.jwt.isNotBlank() ||
+                    initialCfBlob.jumpDestination.isNotBlank()
+            ),
+        )
+    }
     var sshOptions by rememberSaveable { mutableStateOf(existing?.sshOptions ?: "") }
     var moshServerCommand by rememberSaveable { mutableStateOf(existing?.moshServerCommand ?: "") }
     var postLoginCommand by rememberSaveable { mutableStateOf(existing?.postLoginCommand ?: "") }
@@ -1239,14 +1290,20 @@ fun ConnectionEditDialog(
                             singleLine = true,
                             modifier = Modifier.weight(1f),
                         )
-                        OutlinedTextField(
-                            value = port,
-                            onValueChange = { port = it.filter { c -> c.isDigit() } },
-                            label = { Text(stringResource(R.string.connections_field_port)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.width(80.dp),
-                        )
+                        // Port field hidden when this SSH profile routes via
+                        // a Cloudflare Tunnel transport (GH #154) — the CF
+                        // tunnel dial ignores port; the upstream SSH target
+                        // is decided server-side from the published route.
+                        if (!useCloudflareTunnel) {
+                            OutlinedTextField(
+                                value = port,
+                                onValueChange = { port = it.filter { c -> c.isDigit() } },
+                                label = { Text(stringResource(R.string.connections_field_port)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.width(80.dp),
+                            )
+                        }
                     }
 
                     // Jump host selector — exclude self to prevent circular references
@@ -1986,7 +2043,9 @@ fun ConnectionEditDialog(
                     val tunnelDropdownLabel = selectedTunnel?.let {
                         stringResource(R.string.connections_tunnel_dropdown_label, it.label)
                     }
+                    val cfTunnelLabel = stringResource(R.string.connections_dropdown_cloudflare_tunnel)
                     val selectedLabel = when {
+                        useCloudflareTunnel -> cfTunnelLabel
                         tunnelDropdownLabel != null -> tunnelDropdownLabel
                         proxyType != null -> proxyType!!
                         else -> noneDirectLabel
@@ -2015,15 +2074,34 @@ fun ConnectionEditDialog(
                                     proxyType = null
                                     proxyHost = ""
                                     tunnelConfigId = null
+                                    useCloudflareTunnel = false
                                     proxyExpanded = false
                                 },
                             )
+                            // Cloudflare Tunnel transport (GH #154) — the SSH
+                            // profile owns a hidden TunnelConfig row, so only
+                            // SSH-family profiles can opt in here. The form
+                            // below shares the SSH `host` field as the
+                            // tunnel hostname rather than duplicating it.
+                            if (connectionType == "SSH") {
+                                DropdownMenuItem(
+                                    text = { Text(cfTunnelLabel) },
+                                    onClick = {
+                                        useCloudflareTunnel = true
+                                        proxyType = null
+                                        proxyHost = ""
+                                        tunnelConfigId = null
+                                        proxyExpanded = false
+                                    },
+                                )
+                            }
                             listOf("SOCKS5", "SOCKS4", "HTTP").forEach { kind ->
                                 DropdownMenuItem(
                                     text = { Text(kind) },
                                     onClick = {
                                         proxyType = kind
                                         tunnelConfigId = null
+                                        useCloudflareTunnel = false
                                         if (kind == "HTTP" && proxyPort == "1080") {
                                             proxyPort = "8080"
                                         } else if (kind != "HTTP" && proxyPort == "8080") {
@@ -2055,35 +2133,23 @@ fun ConnectionEditDialog(
                                             tunnelConfigId = tunnel.id
                                             proxyType = null
                                             proxyHost = ""
+                                            useCloudflareTunnel = false
                                             proxyExpanded = false
                                         },
                                     )
                                 }
                             }
                             if (onManageTunnels != null) {
-                                // Three always-visible actions: quick-add
-                                // for each backend with a usable add path,
-                                // and a manage-everything link. CFT and
-                                // WireGuard navigate to the Tunnels add
-                                // dialog with the type chip pre-selected
-                                // so the user doesn't have to know which
-                                // chip to pick. Tailscale's add path is
-                                // disabled in the Tunnels screen pending
-                                // the tsnet bridge, so we don't list it
-                                // here yet.
+                                // Quick-add for WireGuard (the only standalone
+                                // backend with a usable add path right now)
+                                // plus a manage-everything link. Cloudflare
+                                // Tunnel used to live here too but is now an
+                                // inline transport on the SSH profile itself
+                                // (GH #154) — picking it from the route-through
+                                // list above is the new path. Tailscale's add
+                                // path is disabled in the Tunnels screen
+                                // pending the tsnet bridge.
                                 HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            "+ New Cloudflare Tunnel",
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                    },
-                                    onClick = {
-                                        proxyExpanded = false
-                                        onManageTunnels(sh.haven.core.data.db.entities.TunnelConfigType.CLOUDFLARE_ACCESS)
-                                    },
-                                )
                                 DropdownMenuItem(
                                     text = {
                                         Text(
@@ -2110,6 +2176,75 @@ fun ConnectionEditDialog(
                                 )
                             }
                         }
+                    }
+
+                    // Inline Cloudflare Tunnel transport fields (GH #154).
+                    // Shown when the route-through dropdown picks
+                    // "Cloudflare Tunnel". The SSH `host` field above
+                    // doubles as the tunnel hostname; the form here only
+                    // adds the optional Access-auth bits, jump destination,
+                    // and a Test connection button. JWT capture happens
+                    // via the existing in-app WebView contract.
+                    if (useCloudflareTunnel && connectionType == "SSH") {
+                        Spacer(Modifier.height(8.dp))
+                        val tunnelViewModel: TunnelViewModel = hiltViewModel()
+                        val cfTestResult by tunnelViewModel.cfTestResult.collectAsState()
+                        val cfLoginLauncher = rememberLauncherForActivityResult(
+                            contract = CloudflareAccessLoginContract(),
+                        ) { result ->
+                            when (result) {
+                                is CloudflareAccessLoginContract.Result.Success -> {
+                                    cfJwt = result.jwt
+                                    cfExpiresAt = result.expiresAtSeconds
+                                }
+                                is CloudflareAccessLoginContract.Result.Failed,
+                                CloudflareAccessLoginContract.Result.Cancelled -> Unit
+                            }
+                        }
+                        Text(
+                            "Routing through a Cloudflare Tunnel connector. The host above is used as the tunnel hostname; port doesn't apply (the connector decides the upstream SSH target).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        CloudflareInlineFields(
+                            hostname = host,
+                            // Hostname comes from the SSH `host` field —
+                            // changes there flow through automatically.
+                            onHostnameChange = { /* no-op; SSH host owns it */ },
+                            teamDomain = cfTeamDomain,
+                            onTeamDomainChange = { cfTeamDomain = it },
+                            jwt = cfJwt,
+                            jwtExpiresAt = cfExpiresAt,
+                            jumpDestination = cfJumpDestination,
+                            onJumpDestinationChange = { cfJumpDestination = it },
+                            onSignInClick = {
+                                val h = host.trim()
+                                if (h.isNotEmpty()) {
+                                    cfLoginLauncher.launch(
+                                        CloudflareAccessLoginContract.Input(
+                                            hostname = h,
+                                            teamDomain = cfTeamDomain.trim(),
+                                        ),
+                                    )
+                                }
+                            },
+                            advancedOpen = cfAdvancedOpen,
+                            onAdvancedToggle = { cfAdvancedOpen = !cfAdvancedOpen },
+                            onJwtPaste = { pasted, expiresAt ->
+                                cfJwt = pasted
+                                cfExpiresAt = expiresAt
+                            },
+                            testResult = cfTestResult,
+                            onTestClick = {
+                                tunnelViewModel.testCloudflareAccess(
+                                    host.trim(),
+                                    cfJwt.trim(),
+                                    cfJumpDestination.trim(),
+                                )
+                            },
+                            showHostname = false,
+                            showIntroBlurb = false,
+                        )
                     }
 
                     if (proxyType != null) {
@@ -2405,7 +2540,10 @@ fun ConnectionEditDialog(
                                 ?.coerceAtLeast(0) ?: KnockSequence.DEFAULT_DELAY_MS,
                         )
                     } else if (connectionType == "SSH") {
-                        val portInt = port.toIntOrNull() ?: 22
+                        // CF tunnel transport forces port 22 (the tunnel
+                        // dial ignores port; this keeps downstream consumers
+                        // that read `profile.port` sensible).
+                        val portInt = if (useCloudflareTunnel) 22 else (port.toIntOrNull() ?: 22)
                         // Saved VNC settings round-trip: if the section was
                         // visible and the user didn't hit "Clear", persist the
                         // edited values; if they cleared it, null everything
@@ -2424,11 +2562,16 @@ fun ConnectionEditDialog(
                             connectionType = "SSH",
                             destinationHash = null,
                             jumpProfileId = jumpProfileId,
-                            proxyType = proxyType,
-                            proxyHost = proxyHost.ifBlank { null },
+                            proxyType = if (useCloudflareTunnel) null else proxyType,
+                            proxyHost = if (useCloudflareTunnel) null else proxyHost.ifBlank { null },
                             proxyPort = proxyPort.toIntOrNull() ?: 1080,
                             keyId = keyId,
-                            tunnelConfigId = tunnelConfigId,
+                            // tunnelConfigId is owned by the ViewModel save
+                            // helper when the user picks the inline CF
+                            // transport — it overwrites this with the
+                            // upserted embedded tunnel id. Anything else
+                            // (shared standalone tunnel) is persisted as-is.
+                            tunnelConfigId = if (useCloudflareTunnel) null else tunnelConfigId,
                             sshOptions = sshOptions.ifBlank { null },
                             moshServerCommand = moshServerCommand.ifBlank { null },
                             postLoginCommand = postLoginCommand.ifBlank { null },
@@ -2483,7 +2626,20 @@ fun ConnectionEditDialog(
                             groupId = groupId,
                         )
                     }
-                    onSave(profile)
+                    // Embedded Cloudflare Tunnel transport input — only
+                    // non-null for SSH profiles that opted in via the
+                    // route-through dropdown. Hostname mirrors the SSH
+                    // host field; the ViewModel save helper trims/normalises.
+                    val cfInput = if (useCloudflareTunnel && connectionType == "SSH") {
+                        EmbeddedCloudflareTunnelInput(
+                            hostname = host,
+                            teamDomain = cfTeamDomain,
+                            jwt = cfJwt,
+                            jwtExpiresAt = cfExpiresAt,
+                            jumpDestination = cfJumpDestination,
+                        )
+                    } else null
+                    onSave(profile, cfInput)
                 },
                 enabled = canSave,
             ) {

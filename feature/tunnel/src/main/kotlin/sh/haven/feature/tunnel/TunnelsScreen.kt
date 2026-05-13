@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -51,6 +50,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import sh.haven.core.data.db.entities.TunnelConfig
+import sh.haven.core.data.db.entities.TunnelConfigType
 import sh.haven.core.data.db.entities.typeEnum
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -78,11 +78,10 @@ fun TunnelsScreen(
      * existing entry-point behaviour (manual + button, type starts on
      * WireGuard).
      */
-    initialAddType: sh.haven.core.data.db.entities.TunnelConfigType? = null,
+    initialAddType: TunnelConfigType? = null,
 ) {
     val tunnels by viewModel.tunnels.collectAsState()
     val error by viewModel.error.collectAsState()
-    val cfTestResult by viewModel.cfTestResult.collectAsState()
     val message by viewModel.message.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
@@ -141,13 +140,15 @@ fun TunnelsScreen(
     }
 
     if (showAddDialog) {
+        // Cloudflare Tunnel is no longer a standalone type (GH #154 — it's
+        // now an SSH-profile transport). Fall back to WireGuard if a caller
+        // pre-selects the retired chip.
+        val effectiveInitialType = initialAddType
+            ?.takeIf { it != TunnelConfigType.CLOUDFLARE_ACCESS }
+            ?: TunnelConfigType.WIREGUARD
         AddTunnelDialog(
-            initialType = initialAddType
-                ?: sh.haven.core.data.db.entities.TunnelConfigType.WIREGUARD,
-            onDismiss = {
-                showAddDialog = false
-                viewModel.resetCfTestResult()
-            },
+            initialType = effectiveInitialType,
+            onDismiss = { showAddDialog = false },
             onSubmitWireguard = { label, configText ->
                 viewModel.addWireguardConfig(label, configText)
                 showAddDialog = false
@@ -155,15 +156,6 @@ fun TunnelsScreen(
             onSubmitTailscale = { label, authKey, controlUrl ->
                 viewModel.addTailscaleConfig(label, authKey, controlUrl)
                 showAddDialog = false
-            },
-            cfTestResult = cfTestResult,
-            onTestCfAccess = { hostname, jwt, jumpDestination ->
-                viewModel.testCloudflareAccess(hostname, jwt, jumpDestination)
-            },
-            onSubmitCloudflareAccess = { label, hostname, teamDomain, jwt, expiresAt, jumpDestination ->
-                viewModel.addCloudflareAccessConfig(label, hostname, teamDomain, jwt, expiresAt, jumpDestination)
-                showAddDialog = false
-                viewModel.resetCfTestResult()
             },
         )
     }
@@ -282,46 +274,16 @@ private fun TunnelRow(
 
 @Composable
 private fun AddTunnelDialog(
-    initialType: sh.haven.core.data.db.entities.TunnelConfigType,
+    initialType: TunnelConfigType,
     onDismiss: () -> Unit,
     onSubmitWireguard: (label: String, configText: String) -> Unit,
     onSubmitTailscale: (label: String, authKey: String, controlUrl: String) -> Unit,
-    cfTestResult: TunnelViewModel.CloudflareAccessTestResult,
-    onTestCfAccess: (hostname: String, jwt: String, jumpDestination: String) -> Unit,
-    onSubmitCloudflareAccess: (
-        label: String,
-        hostname: String,
-        teamDomain: String,
-        jwt: String,
-        expiresAtSeconds: Long,
-        jumpDestination: String,
-    ) -> Unit,
 ) {
     var type by remember { mutableStateOf(initialType) }
     var label by remember { mutableStateOf("") }
     var configText by remember { mutableStateOf("") }
     var authKey by remember { mutableStateOf("") }
     var controlUrl by remember { mutableStateOf("") }
-    // Cloudflare Tunnel form state — survives type-switch in case user
-    // flips back and forth before saving.
-    var cfHostname by remember { mutableStateOf("") }
-    var cfTeamDomain by remember { mutableStateOf("") }
-    var cfJwt by remember { mutableStateOf("") }
-    var cfExpiresAt by remember { mutableStateOf(0L) }
-    var cfJumpDestination by remember { mutableStateOf("") }
-    var cfAdvancedOpen by remember { mutableStateOf(false) }
-    val cfLoginLauncher = rememberLauncherForActivityResult(
-        contract = CloudflareAccessLoginContract(),
-    ) { result ->
-        when (result) {
-            is CloudflareAccessLoginContract.Result.Success -> {
-                cfJwt = result.jwt
-                cfExpiresAt = result.expiresAtSeconds
-            }
-            is CloudflareAccessLoginContract.Result.Failed,
-            CloudflareAccessLoginContract.Result.Cancelled -> Unit
-        }
-    }
     val context = LocalContext.current
 
     // Use OpenDocument (SAF) rather than GetContent so the user can pick
@@ -374,14 +336,18 @@ private fun AddTunnelDialog(
 
             // Type picker — FilterChip row over the backends. Each
             // toggles the fields below; label persists across flips.
+            // Cloudflare Tunnel is omitted here on purpose: it lives as
+            // an SSH-profile transport (GH #154), not a standalone tunnel.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                sh.haven.core.data.db.entities.TunnelConfigType.entries.forEach { t ->
-                    androidx.compose.material3.FilterChip(
-                        selected = type == t,
-                        onClick = { type = t },
-                        label = { Text(tunnelTypeLabel(t)) },
-                    )
-                }
+                TunnelConfigType.entries
+                    .filter { it != TunnelConfigType.CLOUDFLARE_ACCESS }
+                    .forEach { t ->
+                        androidx.compose.material3.FilterChip(
+                            selected = type == t,
+                            onClick = { type = t },
+                            label = { Text(tunnelTypeLabel(t)) },
+                        )
+                    }
             }
 
             OutlinedTextField(
@@ -393,7 +359,7 @@ private fun AddTunnelDialog(
             )
 
             when (type) {
-                sh.haven.core.data.db.entities.TunnelConfigType.WIREGUARD -> {
+                TunnelConfigType.WIREGUARD -> {
                     Text(
                         "Paste a wg-quick style config or load a .conf file. Only [Interface] and [Peer] fields are read; unknown keys (PostUp, Table, MTU) are ignored. Hostname endpoints and DNS names are resolved at tunnel start.",
                         style = MaterialTheme.typography.bodySmall,
@@ -428,7 +394,7 @@ private fun AddTunnelDialog(
                         ),
                     )
                 }
-                sh.haven.core.data.db.entities.TunnelConfigType.TAILSCALE -> {
+                TunnelConfigType.TAILSCALE -> {
                     Text(
                         "Generate an authkey in the Tailscale admin console (Settings → Keys), or in your Headscale CLI (`headscale preauthkeys create`). Haven joins your tailnet on first use and reuses the node state after that, so a one-time key is fine. Reusable keys let you reconnect after reinstall.",
                         style = MaterialTheme.typography.bodySmall,
@@ -468,37 +434,13 @@ private fun AddTunnelDialog(
                     )
                     androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
                 }
-                sh.haven.core.data.db.entities.TunnelConfigType.CLOUDFLARE_ACCESS -> {
-                    CloudflareTunnelForm(
-                        hostname = cfHostname,
-                        onHostnameChange = { cfHostname = it; cfJwt = ""; cfExpiresAt = 0L },
-                        teamDomain = cfTeamDomain,
-                        onTeamDomainChange = { cfTeamDomain = it },
-                        jwt = cfJwt,
-                        jwtExpiresAt = cfExpiresAt,
-                        jumpDestination = cfJumpDestination,
-                        onJumpDestinationChange = { cfJumpDestination = it },
-                        onSignInClick = {
-                            val host = cfHostname.trim()
-                            if (host.isNotEmpty()) {
-                                cfLoginLauncher.launch(
-                                    CloudflareAccessLoginContract.Input(
-                                        hostname = host,
-                                        teamDomain = cfTeamDomain.trim(),
-                                    ),
-                                )
-                            }
-                        },
-                        advancedOpen = cfAdvancedOpen,
-                        onAdvancedToggle = { cfAdvancedOpen = !cfAdvancedOpen },
-                        onJwtPaste = { pasted, expiresAt ->
-                            cfJwt = pasted
-                            cfExpiresAt = expiresAt
-                        },
-                        testResult = cfTestResult,
-                        onTestClick = { onTestCfAccess(cfHostname.trim(), cfJwt.trim(), cfJumpDestination.trim()) },
-                    )
-                    androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                TunnelConfigType.CLOUDFLARE_ACCESS -> {
+                    // Retired from this dialog (GH #154). Filtered out of
+                    // the chip row above, so this branch is unreachable in
+                    // practice; it exists only because the enum still
+                    // includes the value for legacy standalone rows in
+                    // the list.
+                    Unit
                 }
             }
 
@@ -508,21 +450,18 @@ private fun AddTunnelDialog(
             ) {
                 TextButton(onClick = onDismiss) { Text("Cancel") }
                 val canSubmit = label.isNotBlank() && when (type) {
-                    sh.haven.core.data.db.entities.TunnelConfigType.WIREGUARD -> configText.isNotBlank()
-                    sh.haven.core.data.db.entities.TunnelConfigType.TAILSCALE -> authKey.isNotBlank()
-                    // JWT is optional — unprotected Tunnel routes need only a hostname.
-                    sh.haven.core.data.db.entities.TunnelConfigType.CLOUDFLARE_ACCESS ->
-                        cfHostname.isNotBlank()
+                    TunnelConfigType.WIREGUARD -> configText.isNotBlank()
+                    TunnelConfigType.TAILSCALE -> authKey.isNotBlank()
+                    TunnelConfigType.CLOUDFLARE_ACCESS -> false
                 }
                 Button(
                     onClick = {
                         when (type) {
-                            sh.haven.core.data.db.entities.TunnelConfigType.WIREGUARD ->
+                            TunnelConfigType.WIREGUARD ->
                                 onSubmitWireguard(label, configText)
-                            sh.haven.core.data.db.entities.TunnelConfigType.TAILSCALE ->
+                            TunnelConfigType.TAILSCALE ->
                                 onSubmitTailscale(label, authKey, controlUrl)
-                            sh.haven.core.data.db.entities.TunnelConfigType.CLOUDFLARE_ACCESS ->
-                                onSubmitCloudflareAccess(label, cfHostname, cfTeamDomain, cfJwt, cfExpiresAt, cfJumpDestination)
+                            TunnelConfigType.CLOUDFLARE_ACCESS -> Unit
                         }
                     },
                     enabled = canSubmit,
@@ -533,214 +472,10 @@ private fun AddTunnelDialog(
     }
 }
 
-private fun tunnelTypeLabel(t: sh.haven.core.data.db.entities.TunnelConfigType): String =
+private fun tunnelTypeLabel(t: TunnelConfigType): String =
     when (t) {
-        sh.haven.core.data.db.entities.TunnelConfigType.WIREGUARD -> "WireGuard"
-        sh.haven.core.data.db.entities.TunnelConfigType.TAILSCALE -> "Tailscale"
-        sh.haven.core.data.db.entities.TunnelConfigType.CLOUDFLARE_ACCESS -> "Cloudflare Tunnel"
+        TunnelConfigType.WIREGUARD -> "WireGuard"
+        TunnelConfigType.TAILSCALE -> "Tailscale"
+        TunnelConfigType.CLOUDFLARE_ACCESS -> "Cloudflare Tunnel"
     }
 
-@Composable
-private fun CloudflareTunnelForm(
-    hostname: String,
-    onHostnameChange: (String) -> Unit,
-    teamDomain: String,
-    onTeamDomainChange: (String) -> Unit,
-    jwt: String,
-    jwtExpiresAt: Long,
-    jumpDestination: String,
-    onJumpDestinationChange: (String) -> Unit,
-    onSignInClick: () -> Unit,
-    advancedOpen: Boolean,
-    onAdvancedToggle: () -> Unit,
-    onJwtPaste: (jwt: String, expiresAtSeconds: Long) -> Unit,
-    testResult: TunnelViewModel.CloudflareAccessTestResult,
-    onTestClick: () -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Surface(
-            color = MaterialTheme.colorScheme.tertiaryContainer,
-            shape = MaterialTheme.shapes.small,
-        ) {
-            Text(
-                "Experimental — Haven implements the same WebSocket wire protocol as `cloudflared access ssh`. Tested against a small set of tenants; please report mismatches via GitHub #154.",
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-        }
-
-        Text(
-            "Route SSH through a Cloudflare Tunnel published hostname — the in-app equivalent of `cloudflared access ssh --hostname <host>`. " +
-                "Public Tunnel routes need only a hostname. Access-protected routes additionally require a JWT — tap Sign in to capture one via your team's IdP.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        OutlinedTextField(
-            value = hostname,
-            onValueChange = onHostnameChange,
-            label = { Text("Hostname (e.g. ssh.example.com)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = FontFamily.Monospace,
-            ),
-        )
-
-        val now = remember { System.currentTimeMillis() / 1000 }
-        val jwtStatus = when {
-            jwt.isBlank() -> "No JWT — only works for unprotected Tunnel routes"
-            jwtExpiresAt in 1 until now -> "JWT expired — sign in again"
-            jwtExpiresAt > 0 -> {
-                val secs = jwtExpiresAt - now
-                val hours = secs / 3600
-                if (hours > 0) "Signed in · expires in ~${hours}h" else "Signed in · expires in <1h"
-            }
-            else -> "Signed in"
-        }
-        Text(
-            jwtStatus,
-            style = MaterialTheme.typography.bodySmall,
-            color = when {
-                jwt.isBlank() -> MaterialTheme.colorScheme.onSurfaceVariant
-                jwtExpiresAt in 1 until now -> MaterialTheme.colorScheme.error
-                else -> MaterialTheme.colorScheme.primary
-            },
-        )
-
-        // Test the WS handshake without creating an SSH profile. Works
-        // with or without a JWT — the failure surface will tell you if
-        // the route needs Access auth.
-        OutlinedButton(
-            onClick = onTestClick,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = hostname.isNotBlank() &&
-                testResult !is TunnelViewModel.CloudflareAccessTestResult.Running,
-        ) {
-            Text(
-                if (testResult is TunnelViewModel.CloudflareAccessTestResult.Running) {
-                    "Testing…"
-                } else {
-                    "Test connection"
-                },
-            )
-        }
-        when (testResult) {
-            TunnelViewModel.CloudflareAccessTestResult.Idle,
-            TunnelViewModel.CloudflareAccessTestResult.Running -> Unit
-            is TunnelViewModel.CloudflareAccessTestResult.Success -> {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = MaterialTheme.shapes.small,
-                ) {
-                    Text(
-                        testResult.message,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
-            }
-            is TunnelViewModel.CloudflareAccessTestResult.Failure -> {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    shape = MaterialTheme.shapes.small,
-                ) {
-                    Text(
-                        testResult.message,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                    )
-                }
-            }
-        }
-
-        TextButton(onClick = onAdvancedToggle) {
-            Text(if (advancedOpen) "Hide advanced" else "Advanced (Access auth, bastion, paste JWT)")
-        }
-        if (advancedOpen) {
-            // Access-protected route fields. Hidden by default because
-            // the common case (public Tunnel route) doesn't need them.
-            OutlinedButton(
-                onClick = onSignInClick,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = hostname.isNotBlank(),
-            ) {
-                Text(if (jwt.isBlank()) "Sign in via Cloudflare Access" else "Re-authenticate")
-            }
-            OutlinedTextField(
-                value = teamDomain,
-                onValueChange = onTeamDomainChange,
-                label = { Text("Team domain (optional)") },
-                placeholder = {
-                    Text(
-                        "myteam.cloudflareaccess.com",
-                        fontFamily = FontFamily.Monospace,
-                    )
-                },
-                supportingText = {
-                    Text(
-                        "Only needed for Access-protected routes; lets us capture the team-domain cookie as a fallback if the per-app one is missing.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
-            )
-            OutlinedTextField(
-                value = jumpDestination,
-                onValueChange = onJumpDestinationChange,
-                label = { Text("Jump destination (optional)") },
-                placeholder = {
-                    Text(
-                        "internal-host:22",
-                        fontFamily = FontFamily.Monospace,
-                    )
-                },
-                supportingText = {
-                    Text(
-                        "Bastion-mode multi-target tunnels: forwarded as `Cf-Access-Jump-Destination`. Leave blank for one-target routes.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                ),
-            )
-            Text(
-                "For headless setups: run `cloudflared access token --app https://<hostname>` on another machine and paste the JWT here. Expiry is parsed from the token automatically.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedTextField(
-                value = jwt,
-                onValueChange = { pasted ->
-                    val expiry = sh.haven.core.security.JwtPayload.parse(pasted)
-                        ?.expiresAtSeconds ?: 0L
-                    onJwtPaste(pasted, expiry)
-                },
-                label = { Text("Cloudflare Access JWT (optional)") },
-                singleLine = false,
-                minLines = 3,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 80.dp),
-                textStyle = MaterialTheme.typography.bodySmall.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                ),
-            )
-        }
-    }
-}

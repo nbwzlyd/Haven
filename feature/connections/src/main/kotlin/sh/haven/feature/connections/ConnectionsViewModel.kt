@@ -165,8 +165,15 @@ class ConnectionsViewModel @Inject constructor(
     val sshKeys: StateFlow<List<SshKey>> = sshKeyRepository.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * Shared (non-embedded) tunnel configs the route-through dropdown
+     * surfaces in the SSH profile editor. Cloudflare Tunnels embedded on
+     * a single SSH profile (GH #154, `ownerProfileId != null`) are
+     * excluded from this list — they're surfaced inline on the owning
+     * profile instead.
+     */
     val tunnelConfigs: StateFlow<List<sh.haven.core.data.db.entities.TunnelConfig>> =
-        tunnelConfigRepository.observeAll()
+        tunnelConfigRepository.observeStandalone()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val globalSessionManagerLabel: StateFlow<String> = preferencesRepository.sessionManager
@@ -728,6 +735,65 @@ class ConnectionsViewModel @Inject constructor(
             repository.save(profile)
         }
     }
+
+    /**
+     * Persist an SSH profile alongside its embedded Cloudflare Tunnel
+     * transport (GH #154). When [cfTunnel] is non-null, the tunnel blob is
+     * upserted first (so we know its id), then the profile is saved with
+     * `tunnelConfigId` pointing at it and port forced to 22 — the CF
+     * tunnel dial ignores port anyway, but the resolver path expects a
+     * sensible value. When [cfTunnel] is null, any existing embedded
+     * tunnel owned by this profile is dropped so the user can switch back
+     * to direct-dial or a shared tunnel cleanly.
+     */
+    fun saveProfileWithEmbeddedCloudflareTunnel(
+        profile: ConnectionProfile,
+        cfTunnel: EmbeddedCloudflareTunnelInput?,
+    ) {
+        viewModelScope.launch {
+            if (cfTunnel != null) {
+                val hostname = cfTunnel.hostname.trim()
+                    .removePrefix("https://")
+                    .removePrefix("http://")
+                    .substringBefore('/')
+                val blob = sh.haven.core.tunnel.CloudflareAccessConfigBlob(
+                    hostname = hostname,
+                    teamDomain = cfTunnel.teamDomain.trim()
+                        .removePrefix("https://")
+                        .removePrefix("http://"),
+                    jwt = cfTunnel.jwt.trim(),
+                    jwtExpiresAt = cfTunnel.jwtExpiresAt,
+                    jumpDestination = cfTunnel.jumpDestination.trim(),
+                )
+                val tunnelId = tunnelConfigRepository.upsertEmbedded(
+                    profileId = profile.id,
+                    type = sh.haven.core.data.db.entities.TunnelConfigType.CLOUDFLARE_ACCESS.name,
+                    label = "Cloudflare Tunnel: $hostname",
+                    configText = blob.encode(),
+                )
+                repository.save(
+                    profile.copy(
+                        tunnelConfigId = tunnelId,
+                        port = 22,
+                        proxyType = null,
+                        proxyHost = null,
+                    ),
+                )
+            } else {
+                tunnelConfigRepository.deleteByOwner(profile.id)
+                repository.save(profile)
+            }
+        }
+    }
+
+    /**
+     * One-shot fetch of an SSH profile's embedded Cloudflare Tunnel, if
+     * any. The Connections screen calls this when opening the edit dialog
+     * so the inline form can pre-populate. Returns the decrypted blob row;
+     * null if the profile has no embedded tunnel.
+     */
+    suspend fun embeddedCloudflareTunnelFor(profileId: String): sh.haven.core.data.db.entities.TunnelConfig? =
+        tunnelConfigRepository.findByOwner(profileId)
 
     /** Persist new sort order for a reordered list of top-level profile IDs. */
     fun createGroup(label: String) {

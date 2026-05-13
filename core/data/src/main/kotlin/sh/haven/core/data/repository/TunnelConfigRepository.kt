@@ -21,6 +21,13 @@ class TunnelConfigRepository @Inject constructor(
 ) {
     fun observeAll(): Flow<List<TunnelConfig>> = tunnelConfigDao.observeAll()
 
+    /**
+     * Observe only standalone tunnels (those without an owning profile).
+     * The Tunnels screen uses this; embedded Cloudflare Tunnels live
+     * inside SSH profile editors instead. See GH #154.
+     */
+    fun observeStandalone(): Flow<List<TunnelConfig>> = tunnelConfigDao.observeStandalone()
+
     suspend fun getAll(): List<TunnelConfig> = tunnelConfigDao.getAll()
 
     /**
@@ -54,4 +61,40 @@ class TunnelConfigRepository @Inject constructor(
     }
 
     suspend fun delete(id: String) = tunnelConfigDao.deleteById(id)
+
+    /**
+     * Return the decrypted embedded tunnel owned by [profileId], or null if
+     * none exists. Used by the SSH profile editor to preload Cloudflare
+     * Tunnel transport fields when reopening an existing profile.
+     */
+    suspend fun findByOwner(profileId: String): TunnelConfig? {
+        val row = tunnelConfigDao.findByOwner(profileId) ?: return null
+        return if (KeyEncryption.isEncrypted(row.configText)) {
+            row.copy(configText = KeyEncryption.decrypt(context, row.configText))
+        } else {
+            row
+        }
+    }
+
+    /**
+     * Upsert an embedded tunnel for [profileId], reusing the existing row's
+     * id (and createdAt) when present so the encryption-at-rest payload
+     * stays addressable by [ConnectionProfile.tunnelConfigId] across edits.
+     * Returns the id of the persisted row.
+     */
+    suspend fun upsertEmbedded(profileId: String, type: String, label: String, configText: ByteArray): String {
+        val existing = tunnelConfigDao.findByOwner(profileId)
+        val row = TunnelConfig(
+            id = existing?.id ?: java.util.UUID.randomUUID().toString(),
+            label = label,
+            type = type,
+            configText = KeyEncryption.encrypt(context, configText),
+            createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+            ownerProfileId = profileId,
+        )
+        tunnelConfigDao.upsert(row)
+        return row.id
+    }
+
+    suspend fun deleteByOwner(profileId: String) = tunnelConfigDao.deleteByOwner(profileId)
 }

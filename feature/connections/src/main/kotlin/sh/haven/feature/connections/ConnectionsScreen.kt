@@ -101,6 +101,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
@@ -164,10 +165,11 @@ fun ConnectionsScreen(
     val sshKeys by viewModel.sshKeys.collectAsState()
     val tunnelConfigs by viewModel.tunnelConfigs.collectAsState()
     var showTunnelsScreen by remember { mutableStateOf(false) }
-    // When the user picks "+ New Cloudflare Tunnel" / "+ New WireGuard
-    // tunnel" from a profile's Route-through dropdown, navigate to the
-    // Tunnels screen with the Add dialog auto-opened on that type.
-    // null means "Manage tunnels…" (no auto-open).
+    // When the user picks "+ New WireGuard tunnel" from a profile's
+    // Route-through dropdown, navigate to the Tunnels screen with the
+    // Add dialog auto-opened on that type. null means "Manage tunnels…"
+    // (no auto-open). Cloudflare Tunnel used to live here too but is
+    // now an inline SSH-profile transport — see #154.
     var pendingTunnelAddType by remember {
         mutableStateOf<sh.haven.core.data.db.entities.TunnelConfigType?>(null)
     }
@@ -451,8 +453,8 @@ fun ConnectionsScreen(
                 viewModel.testKnock(host, sequence, delayMs)
             },
             onDismiss = { showAddDialog = false },
-            onSave = { profile ->
-                viewModel.saveConnection(profile)
+            onSave = { profile, cfTunnel ->
+                viewModel.saveProfileWithEmbeddedCloudflareTunnel(profile, cfTunnel)
                 showAddDialog = false
             },
         )
@@ -531,6 +533,16 @@ fun ConnectionsScreen(
     }
 
     editingProfile?.let { profile ->
+        // Load the embedded Cloudflare Tunnel (if any) before showing the
+        // dialog so the inline transport fields can pre-populate. Loading
+        // happens once per profile-edit cycle; null is the "no embedded
+        // tunnel" state.
+        val embeddedCf = produceState<sh.haven.core.data.db.entities.TunnelConfig?>(
+            initialValue = null,
+            key1 = profile.id,
+        ) {
+            value = viewModel.embeddedCloudflareTunnelFor(profile.id)
+        }
         ConnectionEditDialog(
             existing = profile,
             discoveredDestinations = discoveredDestinations,
@@ -540,6 +552,7 @@ fun ConnectionsScreen(
             groups = groups,
             sshKeys = sshKeys,
             tunnelConfigs = tunnelConfigs,
+            embeddedCloudflareTunnel = embeddedCf.value,
             onManageTunnels = { preselect ->
                 pendingTunnelAddType = preselect
                 showTunnelsScreen = true
@@ -557,8 +570,8 @@ fun ConnectionsScreen(
                 viewModel.testKnock(host, sequence, delayMs)
             },
             onDismiss = { editingProfileId = null },
-            onSave = { updated ->
-                viewModel.saveConnection(updated)
+            onSave = { updated, cfTunnel ->
+                viewModel.saveProfileWithEmbeddedCloudflareTunnel(updated, cfTunnel)
                 editingProfileId = null
             },
         )

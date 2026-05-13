@@ -27,6 +27,13 @@ data class TunnelConfig(
      *  it's the Access hostname + cached IdP JWT JSON. */
     val configText: ByteArray,
     val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * If non-null, this tunnel is owned by a single [ConnectionProfile] and
+     * is hidden from the standalone Tunnels list — the user manages it via
+     * the SSH profile editor as a transport, not as a stand-alone tunnel.
+     * Deleted with the owning profile. See GH #154.
+     */
+    val ownerProfileId: String? = null,
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
