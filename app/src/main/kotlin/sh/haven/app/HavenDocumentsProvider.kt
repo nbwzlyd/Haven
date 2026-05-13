@@ -11,7 +11,9 @@ import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
 import android.util.Log
 import android.webkit.MimeTypeMap
-import com.jcraft.jsch.ChannelSftp
+import kotlinx.coroutines.runBlocking
+import sh.haven.core.ssh.sftp.ListResult
+import sh.haven.core.ssh.sftp.SftpSession
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -192,13 +194,13 @@ class HavenDocumentsProvider : DocumentsProvider() {
                     entry.isDirectory, entry.size, entry.modifiedTime)
             }
         } else {
-            val channel = getSftpChannel(profileId)
-            if (channel != null) {
+            val session = getSftpSession(profileId)
+            if (session != null) {
                 val name = path.trimEnd('/').substringAfterLast('/')
                 try {
-                    val attrs = channel.stat(path)
+                    val attrs = runBlocking { session.stat(path) }
                     addDocRow(cursor, profileId, name, path,
-                        attrs.isDir, attrs.size, attrs.mTime.toLong())
+                        attrs.isDirectory, attrs.size, attrs.modifiedTimeSeconds.toLong())
                 } catch (e: Exception) {
                     Log.e(TAG, "stat failed: $path", e)
                 }
@@ -229,25 +231,23 @@ class HavenDocumentsProvider : DocumentsProvider() {
                 Log.e(TAG, "SMB listDirectory failed: $path", e)
             }
         } else {
-            val channel = getSftpChannel(profileId)
-            if (channel != null) {
+            val session = getSftpSession(profileId)
+            if (session != null) {
                 try {
                     data class PendingEntry(val name: String, val path: String, val isLink: Boolean,
                         val isDir: Boolean, val size: Long, val mTime: Long)
                     val pending = mutableListOf<PendingEntry>()
-                    channel.ls(path) { lsEntry ->
-                        val name = lsEntry.filename
-                        if (name != "." && name != "..") {
-                            val attrs = lsEntry.attrs
-                            val childPath = path.trimEnd('/') + "/" + name
-                            pending.add(PendingEntry(name, childPath, attrs.isLink,
-                                attrs.isDir, attrs.size, attrs.mTime.toLong()))
+                    runBlocking {
+                        session.list(path) { attrs ->
+                            val childPath = path.trimEnd('/') + "/" + attrs.filename
+                            pending.add(PendingEntry(attrs.filename, childPath, attrs.isSymlink,
+                                attrs.isDirectory, attrs.size, attrs.modifiedTimeSeconds.toLong()))
+                            ListResult.CONTINUE
                         }
-                        ChannelSftp.LsEntrySelector.CONTINUE
                     }
                     for (entry in pending) {
                         val isDir = if (entry.isLink && !entry.isDir) {
-                            try { channel.stat(entry.path).isDir } catch (_: Exception) { false }
+                            try { runBlocking { session.stat(entry.path).isDirectory } } catch (_: Exception) { false }
                         } else {
                             entry.isDir
                         }
@@ -282,13 +282,13 @@ class HavenDocumentsProvider : DocumentsProvider() {
                 smbClient.download(path, out) { _, _ -> }
             }
         } else {
-            val channel = getSftpChannel(profileId)
+            val session = getSftpSession(profileId)
                 ?: throw IllegalStateException("Not connected")
             if (isWrite) {
-                return openWritableSftpFile(channel, path, cacheFile)
+                return openWritableSftpFile(session, path, cacheFile)
             }
             FileOutputStream(cacheFile).use { out ->
-                channel.get(path, out)
+                runBlocking { session.download(path, out) { _, _ -> } }
             }
         }
 
@@ -315,12 +315,17 @@ class HavenDocumentsProvider : DocumentsProvider() {
                 }
             }
         } else {
-            val channel = getSftpChannel(profileId)
+            val session = getSftpSession(profileId)
                 ?: throw IllegalStateException("Not connected")
-            if (isDir) {
-                channel.mkdir(childPath)
-            } else {
-                channel.put(childPath).close()
+            runBlocking {
+                if (isDir) {
+                    session.mkdir(childPath)
+                } else {
+                    // Create empty file via a zero-byte upload.
+                    "".byteInputStream().use { input ->
+                        session.upload(input, 0L, childPath) { _, _ -> }
+                    }
+                }
             }
         }
 
@@ -341,13 +346,15 @@ class HavenDocumentsProvider : DocumentsProvider() {
             val isDir = entries.firstOrNull { it.name == name }?.isDirectory == true
             smbClient.delete(path, isDir)
         } else {
-            val channel = getSftpChannel(profileId)
+            val session = getSftpSession(profileId)
                 ?: throw IllegalStateException("Not connected")
-            val attrs = channel.stat(path)
-            if (attrs.isDir) {
-                channel.rmdir(path)
-            } else {
-                channel.rm(path)
+            runBlocking {
+                val attrs = session.stat(path)
+                if (attrs.isDirectory) {
+                    session.rmdir(path)
+                } else {
+                    session.rm(path)
+                }
             }
         }
 
@@ -422,16 +429,16 @@ class HavenDocumentsProvider : DocumentsProvider() {
         return entryPoint.smbSessionManager().getClientForProfile(profileId)
     }
 
-    private fun getSftpChannel(profileId: String): ChannelSftp? {
+    private fun getSftpSession(profileId: String): SftpSession? {
         val ssh = entryPoint.sshSessionManager()
         val mosh = entryPoint.moshSessionManager()
         val et = entryPoint.etSessionManager()
 
-        return ssh.openSftpForProfile(profileId)
+        return ssh.openSftpSession(profileId)
             ?: (mosh.getSshClientForProfile(profileId) as? SshClient)
-                ?.openSftpChannel()
+                ?.openSftpSession()
             ?: (et.getSshClientForProfile(profileId) as? SshClient)
-                ?.openSftpChannel()
+                ?.openSftpSession()
     }
 
     private fun openWritableSmbFile(
@@ -460,7 +467,7 @@ class HavenDocumentsProvider : DocumentsProvider() {
     }
 
     private fun openWritableSftpFile(
-        channel: ChannelSftp,
+        session: SftpSession,
         remotePath: String,
         cacheFile: File,
     ): ParcelFileDescriptor {
@@ -473,7 +480,9 @@ class HavenDocumentsProvider : DocumentsProvider() {
             if (e == null) {
                 try {
                     cacheFile.inputStream().use { input ->
-                        channel.put(input, remotePath)
+                        runBlocking {
+                            session.upload(input, cacheFile.length(), remotePath) { _, _ -> }
+                        }
                     }
                 } catch (ex: Exception) {
                     Log.e(TAG, "SFTP write-back failed: $remotePath", ex)

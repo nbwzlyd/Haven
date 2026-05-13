@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.webkit.MimeTypeMap
-import com.jcraft.jsch.SftpProgressMonitor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -1335,21 +1334,19 @@ internal class McpTools(
             throw McpError(-32602, "Missing required argument: profileId")
         }
         val path = args.optString("path", ".").ifEmpty { "." }
-        val channel = sshSessionManager.openSftpForProfile(profileId)
+        val session = sshSessionManager.openSftpSession(profileId)
             ?: throw McpError(-32603, "No connected SFTP session for profile $profileId")
         val arr = JSONArray()
         try {
-            @Suppress("UNCHECKED_CAST")
-            val list = channel.ls(path) as java.util.Vector<com.jcraft.jsch.ChannelSftp.LsEntry>
-            for (e in list) {
-                if (e.filename == "." || e.filename == "..") continue
+            session.list(path) { attrs ->
                 arr.put(JSONObject().apply {
-                    put("name", e.filename)
-                    put("isDir", e.attrs.isDir)
-                    put("size", e.attrs.size)
-                    put("mtime", e.attrs.mTime.toLong())
-                    put("permissions", e.attrs.permissionsString)
+                    put("name", attrs.filename)
+                    put("isDir", attrs.isDirectory)
+                    put("size", attrs.size)
+                    put("mtime", attrs.modifiedTimeSeconds.toLong())
+                    put("permissions", attrs.permissions)
                 })
+                sh.haven.core.ssh.sftp.ListResult.CONTINUE
             }
         } catch (e: Exception) {
             throw McpError(-32603, "Failed to list $path: ${e.message}")
@@ -1369,10 +1366,10 @@ internal class McpTools(
         val path = args.optString("path").ifEmpty {
             throw McpError(-32602, "Missing required argument: path")
         }
-        val channel = sshSessionManager.openSftpForProfile(profileId)
+        val session = sshSessionManager.openSftpSession(profileId)
             ?: throw McpError(-32603, "No connected SFTP session for profile $profileId")
         val size = try {
-            channel.stat(path).size
+            session.stat(path).size
         } catch (e: Exception) {
             throw McpError(-32603, "Failed to stat $path: ${e.message}")
         }
@@ -1383,12 +1380,12 @@ internal class McpTools(
             size = size,
             contentType = guessContentType(path),
             opener = { offset ->
-                val ch = sshSessionManager.openSftpForProfile(profileId)
+                val s = sshSessionManager.openSftpSession(profileId)
                     ?: throw java.io.IOException("SFTP not connected for profile $profileId")
-                if (offset > 0) {
-                    ch.get(path, null as SftpProgressMonitor?, offset)
-                } else {
-                    ch.get(path)
+                // SftpStreamServer.Opener.open is a non-suspend fun interface,
+                // called from the HTTP worker thread — runBlocking is fine here.
+                runBlocking {
+                    s.openInputStream(path, if (offset > 0) offset else 0L)
                 }
             },
         )
@@ -1785,10 +1782,12 @@ internal class McpTools(
         if (!source.exists() || !source.isFile) {
             throw McpError(-32602, "localPath does not point to a regular file")
         }
-        val channel = sshSessionManager.openSftpForProfile(profileId)
+        val session = sshSessionManager.openSftpSession(profileId)
             ?: throw McpError(-32603, "No connected SFTP session for profile $profileId")
         try {
-            channel.put(source.absolutePath, remotePath)
+            source.inputStream().use { input ->
+                session.upload(input, source.length(), remotePath) { _, _ -> }
+            }
         } catch (e: Exception) {
             throw McpError(-32603, "SFTP upload failed: ${e.message}")
         }
@@ -1806,16 +1805,16 @@ internal class McpTools(
         val path = args.optString("path").ifEmpty {
             throw McpError(-32602, "Missing required argument: path")
         }
-        val channel = sshSessionManager.openSftpForProfile(profileId)
+        val session = sshSessionManager.openSftpSession(profileId)
             ?: throw McpError(-32603, "No connected SFTP session for profile $profileId")
         try {
             // Refuse directories — `rm` and `rmdir` are different ops
             // in SFTP and the agent should pick the right verb.
-            val attrs = channel.stat(path)
-            if (attrs.isDir) {
+            val attrs = session.stat(path)
+            if (attrs.isDirectory) {
                 throw McpError(-32602, "Refusing to delete directory '$path' — use a separate rmdir tool when one exists")
             }
-            channel.rm(path)
+            session.rm(path)
         } catch (e: McpError) {
             throw e
         } catch (e: Exception) {
