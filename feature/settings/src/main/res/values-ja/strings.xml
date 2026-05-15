@@ -200,7 +200,6 @@
     <string name="settings_keyboard_mode_title">Keyboard mode</string>
     <string name="settings_dev_install_title">Dev Install</string>
     <string name="settings_dev_install_apk_url">APK URL</string>
-    <string name="settings_mcp_tunnel_title">Tunnel MCP through which profile?</string>
     <string name="settings_font_install_title">Install font from URL</string>
     <string name="settings_ime_flags_title">IME flags</string>
     <!-- #133 phase 2b: SSH host CA pubkey field --> (en fallback)
@@ -212,4 +211,23 @@
     <string name="settings_tap_to_position_title">対応プロンプトでタップしてカーソル移動</string>
     <string name="settings_tap_to_position_subtitle">シェルプロンプト内をタップしてその列にカーソルを移動。OSC 133プロンプトマーカーが必要です（starship、fish 3.6+、最近のbash/zshシェル統合設定）。これらを送信しないシェルでは効果なし</string>
 
+    <string name="settings_bandwidth_suggest_subtitle">数秒後にスループットが約1 Mbps未満になると検出し、ワンタップで256色での再接続を提案します。オフにすると通知が表示されません。</string>
+    <string name="settings_bandwidth_suggest_title">低速なVNC接続では256色を提案</string>
+    <string name="settings_drag_select_subtitle">押す+移動+離すをtmux/zellijに転送し、リモートのスクロールバックを使って選択範囲がビューポートを越えて広がるようにします。オフの場合、ドラッグでリモートをスクロールします（従来の動作）。</string>
+    <string name="settings_drag_select_title">TUIマウスモードでドラッグ選択</string>
+    <string name="settings_section_about">アプリについて</string>
+    <string name="settings_section_advanced">詳細設定</string>
+    <string name="settings_section_appearance">外観</string>
+    <string name="settings_section_backup">バックアップ</string>
+    <string name="settings_section_connections_screen">接続画面</string>
+    <string name="settings_section_desktop">デスクトップ（VNC &amp; RDP）</string>
+    <string name="settings_section_diagnostics">診断</string>
+    <string name="settings_section_keyboard_input">キーボードと入力</string>
+    <string name="settings_section_security_privacy">セキュリティとプライバシー</string>
+    <string name="settings_section_terminal">ターミナル</string>
+    <string name="settings_show_terminal_tab_bar_subtitle">ターミナルの上にセッションタブを表示</string>
+    <string name="settings_show_terminal_tab_bar_title">ターミナルのタブバーを表示</string>
+    <string name="settings_touchpad_input_direct_subtitle">ダイレクトタッチ — 指の位置がポインターになります。トラックパッド風の入力にはオンにしてください。</string>
+    <string name="settings_touchpad_input_title">タッチパッド入力</string>
+    <string name="settings_touchpad_input_touchpad_subtitle">ドラッグでリモートカーソルを移動し、タップでカーソル位置をクリックします。ズーム時はビューポートがカーソルに追従します。</string>
 </resources>

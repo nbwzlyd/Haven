@@ -66,4 +66,7 @@
     <string name="workspace_launch_failed">실패: %1$s</string>
     <string name="workspace_launch_cancel">취소</string>
     <string name="workspace_launch_dismiss">닫기</string>
+    <string name="agent_deny">거부</string>
+    <string name="biometric_screen_lock_icon">화면 잠금</string>
+    <string name="desktop_screen_title">데스크톱</string>
 </resources>

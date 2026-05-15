@@ -219,7 +219,6 @@
     <string name="settings_keyboard_mode_title">键盘模式</string>
     <string name="settings_dev_install_title">开发者安装</string>
     <string name="settings_dev_install_apk_url">APK 地址</string>
-    <string name="settings_mcp_tunnel_title">通过哪个连接配置文件转发 MCP？</string>
     <string name="settings_font_install_title">从 URL 安装字体</string>
     <string name="settings_ime_flags_title">输入法标志</string>
     <!-- #133 phase 2b: SSH host CA pubkey field -->

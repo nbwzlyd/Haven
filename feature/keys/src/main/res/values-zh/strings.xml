@@ -140,4 +140,20 @@
     <string name="stepca_manual_entry">手动输入…</string>
     <string name="stepca_field_oidc_client_secret">OIDC client secret (可选)</string>
     <string name="stepca_field_oidc_client_secret_hint">公共 PKCE 客户端请留空</string>
+    <string name="keys_discover_from_security_key">从安全密钥发现</string>
+    <string name="keys_discover_from_security_key_hint">从插入或轻触的安全密钥枚举常驻 SSH-SK 凭据。跳过 ssh-keygen -K。</string>
+    <string name="keys_discover_picker_title">常驻 SSH 密钥</string>
+    <string name="keys_discover_picker_body">选择要导入的常驻凭据。每个都会成为新的 SSH 密钥条目；私钥材料仍保留在安全密钥本身。</string>
+    <string name="keys_discover_import_selected">导入所选</string>
+    <string name="keys_fido_pin_title">安全密钥 PIN</string>
+    <string name="keys_fido_pin_label">PIN</string>
+    <string name="keys_fido_pin_help">输入在安全密钥上设置的 PIN 以继续。</string>
+    <string name="keys_fido_pin_wrong">PIN 错误。密钥锁定前还剩 %1$d 次尝试。</string>
+    <string name="keys_fido_waiting_title">需要安全密钥</string>
+    <string name="keys_fido_waiting_body">通过 USB 插入安全密钥，或将其轻触设备背面以使用 NFC。检测到后 Haven 将自动继续。</string>
+    <string name="keys_fido_touch_usb_title">触摸您的安全密钥</string>
+    <string name="keys_fido_touch_usb_body">现在按下安全密钥上的按钮以授权该请求。</string>
+    <string name="keys_fido_touch_nfc_title">按住您的安全密钥</string>
+    <string name="keys_fido_touch_nfc_body">将安全密钥贴在设备背面保持两秒。过早移开会中止交换。</string>
+    <string name="keys_fido_cancel_hint">在安全密钥响应之前保持打开。</string>
 </resources>

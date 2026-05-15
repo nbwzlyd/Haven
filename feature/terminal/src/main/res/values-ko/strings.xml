@@ -76,4 +76,7 @@
     <string name="terminal_exit_fullscreen">전체 화면 종료</string>
     <string name="terminal_open_plain_shell">기본 셸 열기</string>
 
+    <string name="terminal_vnc_color_depth">색 농도</string>
+    <string name="terminal_vnc_username_label">사용자 이름 (선택 사항 — VeNCrypt 전용)</string>
+    <string name="terminal_vnc_username_placeholder">기본 VncAuth는 비워 두세요</string>
 </resources>

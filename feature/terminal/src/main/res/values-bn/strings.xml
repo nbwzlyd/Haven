@@ -76,4 +76,6 @@
     <string name="terminal_vnc_color_depth">Colour depth</string>
     <string name="terminal_open_plain_shell">সাধারণ শেল খুলুন</string>
 
+    <string name="terminal_enter_fullscreen">ফুলস্ক্রিনে প্রবেশ করুন</string>
+    <string name="terminal_exit_fullscreen">ফুলস্ক্রিন থেকে বেরিয়ে আসুন</string>
 </resources>

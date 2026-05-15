@@ -200,7 +200,6 @@
     <string name="settings_keyboard_mode_title">Keyboard mode</string>
     <string name="settings_dev_install_title">Dev Install</string>
     <string name="settings_dev_install_apk_url">APK URL</string>
-    <string name="settings_mcp_tunnel_title">Tunnel MCP through which profile?</string>
     <string name="settings_font_install_title">Install font from URL</string>
     <string name="settings_ime_flags_title">IME flags</string>
     <!-- #133 phase 2b: SSH host CA pubkey field --> (en fallback)
@@ -212,4 +211,23 @@
     <string name="settings_tap_to_position_title">Нажмите для перемещения курсора в поддерживаемых приглашениях</string>
     <string name="settings_tap_to_position_subtitle">Нажмите внутри приглашения shell, чтобы переместить курсор в этот столбец. Требуются маркеры OSC 133 (starship, fish 3.6+, современные настройки интеграции оболочки bash/zsh). Не влияет на оболочки, которые их не выдают</string>
 
+    <string name="settings_bandwidth_suggest_subtitle">Обнаруживает пропускную способность ниже ~1 Мбит/с через несколько секунд и предлагает переподключение с 256 цветами одним касанием. Выключено — подсказка не показывается.</string>
+    <string name="settings_bandwidth_suggest_title">Предлагать 256 цветов на медленных VNC-соединениях</string>
+    <string name="settings_drag_select_subtitle">Передаёт нажатие+движение+отпускание в tmux/zellij, чтобы выделение расширялось за пределы экрана через собственную историю удалённого узла. Когда выключено, перетаскивание прокручивает удалённый узел (прежнее поведение).</string>
+    <string name="settings_drag_select_title">Перетаскивание для выделения в режиме мыши TUI</string>
+    <string name="settings_section_about">О приложении</string>
+    <string name="settings_section_advanced">Дополнительно</string>
+    <string name="settings_section_appearance">Оформление</string>
+    <string name="settings_section_backup">Резервное копирование</string>
+    <string name="settings_section_connections_screen">Экран подключений</string>
+    <string name="settings_section_desktop">Рабочий стол (VNC &amp; RDP)</string>
+    <string name="settings_section_diagnostics">Диагностика</string>
+    <string name="settings_section_keyboard_input">Клавиатура и ввод</string>
+    <string name="settings_section_security_privacy">Безопасность и конфиденциальность</string>
+    <string name="settings_section_terminal">Терминал</string>
+    <string name="settings_show_terminal_tab_bar_subtitle">Показывать вкладки сеансов над терминалом</string>
+    <string name="settings_show_terminal_tab_bar_title">Показывать панель вкладок терминала</string>
+    <string name="settings_touchpad_input_direct_subtitle">Прямое касание — положение пальца является указателем. Включите для ввода в стиле трекпада.</string>
+    <string name="settings_touchpad_input_title">Ввод с тачпада</string>
+    <string name="settings_touchpad_input_touchpad_subtitle">Перетаскивание перемещает удалённый курсор; касание выполняет щелчок в позиции курсора. При увеличении область просмотра следует за курсором.</string>
 </resources>

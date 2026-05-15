@@ -76,4 +76,6 @@
     <string name="terminal_vnc_color_depth">Colour depth</string>
     <string name="terminal_open_plain_shell">فتح shell عادي</string>
 
+    <string name="terminal_enter_fullscreen">الدخول إلى وضع ملء الشاشة</string>
+    <string name="terminal_exit_fullscreen">الخروج من وضع ملء الشاشة</string>
 </resources>

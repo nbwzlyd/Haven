@@ -200,7 +200,6 @@
     <string name="settings_keyboard_mode_title">Keyboard mode</string>
     <string name="settings_dev_install_title">Dev Install</string>
     <string name="settings_dev_install_apk_url">APK URL</string>
-    <string name="settings_mcp_tunnel_title">Tunnel MCP through which profile?</string>
     <string name="settings_font_install_title">Install font from URL</string>
     <string name="settings_ime_flags_title">IME flags</string>
     <!-- #133 phase 2b: SSH host CA pubkey field --> (en fallback)
@@ -212,4 +211,23 @@
     <string name="settings_tap_to_position_title">اضغط لتحريك المؤشر في الأوامر المدعومة</string>
     <string name="settings_tap_to_position_subtitle">اضغط داخل أمر shell لنقل المؤشر إلى ذلك العمود. يتطلب علامات OSC 133 (starship وfish 3.6+ وإعدادات bash/zsh حديثة). لا يؤثر على الأصداف التي لا تُصدرها</string>
 
+    <string name="settings_bandwidth_suggest_subtitle">يكتشف معدل نقل أقل من ~1 ميجابت/ثانية بعد بضع ثوانٍ ويعرض إعادة الاتصال بـ 256 لونًا بنقرة واحدة. إيقاف التشغيل يلغي الإشعار.</string>
+    <string name="settings_bandwidth_suggest_title">اقتراح 256 لونًا على اتصالات VNC البطيئة</string>
+    <string name="settings_drag_select_subtitle">يمرر الضغط والحركة والإفلات إلى tmux/zellij بحيث يمتد التحديد عبر منطقة العرض من خلال سجل التمرير الخاص بالجهاز البعيد. عند الإيقاف، يؤدي السحب إلى تمرير الجهاز البعيد (السلوك القديم).</string>
+    <string name="settings_drag_select_title">السحب للتحديد في وضع ماوس TUI</string>
+    <string name="settings_section_about">حول التطبيق</string>
+    <string name="settings_section_advanced">متقدم</string>
+    <string name="settings_section_appearance">المظهر</string>
+    <string name="settings_section_backup">النسخ الاحتياطي</string>
+    <string name="settings_section_connections_screen">شاشة الاتصالات</string>
+    <string name="settings_section_desktop">سطح المكتب (VNC &amp; RDP)</string>
+    <string name="settings_section_diagnostics">التشخيص</string>
+    <string name="settings_section_keyboard_input">لوحة المفاتيح والإدخال</string>
+    <string name="settings_section_security_privacy">الأمان والخصوصية</string>
+    <string name="settings_section_terminal">الطرفية</string>
+    <string name="settings_show_terminal_tab_bar_subtitle">إظهار علامات تبويب الجلسات أعلى الطرفية</string>
+    <string name="settings_show_terminal_tab_bar_title">إظهار شريط علامات تبويب الطرفية</string>
+    <string name="settings_touchpad_input_direct_subtitle">لمس مباشر — موضع الإصبع هو المؤشر. فعّله للإدخال على نمط لوحة اللمس.</string>
+    <string name="settings_touchpad_input_title">إدخال لوحة اللمس</string>
+    <string name="settings_touchpad_input_touchpad_subtitle">السحب يحرّك المؤشر البعيد؛ النقر ينقر عند المؤشر. تتبع منطقة العرض المؤشر عند التكبير.</string>
 </resources>

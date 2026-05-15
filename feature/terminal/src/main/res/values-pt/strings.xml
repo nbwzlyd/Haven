@@ -76,4 +76,6 @@
     <string name="terminal_vnc_color_depth">Colour depth</string>
     <string name="terminal_open_plain_shell">Abrir shell simples</string>
 
+    <string name="terminal_enter_fullscreen">Entrar em tela cheia</string>
+    <string name="terminal_exit_fullscreen">Sair da tela cheia</string>
 </resources>

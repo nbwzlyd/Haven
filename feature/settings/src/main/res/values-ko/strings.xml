@@ -220,7 +220,6 @@
     <string name="settings_keyboard_mode_title">키보드 모드</string>
     <string name="settings_dev_install_title">개발 설치</string>
     <string name="settings_dev_install_apk_url">APK URL</string>
-    <string name="settings_mcp_tunnel_title">어떤 프로필로 MCP를 터널링할까요?</string>
     <string name="settings_font_install_title">URL에서 글꼴 설치</string>
     <string name="settings_ime_flags_title">IME 플래그</string>
     <!-- #133 phase 2b: SSH host CA pubkey field -->

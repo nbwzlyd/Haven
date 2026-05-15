@@ -230,4 +230,30 @@
     <!-- DLNA -->
     <string name="sftp_start_dlna">DLNA 서버 시작</string>
     <string name="sftp_stop_dlna">DLNA 서버 중지</string>
+    <string name="sftp_attach_use_folder">이 폴더 사용</string>
+    <string name="sftp_compression_audio_bitrate">오디오 비트레이트</string>
+    <string name="sftp_compression_quality">품질 (CRF %1$d)</string>
+    <string name="sftp_compression_quick_presets">빠른 프리셋</string>
+    <string name="sftp_compression_resolution">해상도</string>
+    <string name="sftp_compression_speed">인코딩 속도</string>
+    <string name="sftp_conflict_keep_both">둘 다 유지 (이름 변경)</string>
+    <string name="sftp_conflict_overwrite">덮어쓰기</string>
+    <string name="sftp_conflict_skip">건너뛰기</string>
+    <string name="sftp_conflict_title">파일이 이미 있습니다</string>
+    <string name="sftp_convert_audio_encoder">오디오 인코더</string>
+    <string name="sftp_convert_container">컨테이너</string>
+    <string name="sftp_convert_save_to">저장 위치</string>
+    <string name="sftp_convert_video_encoder">비디오 인코더</string>
+    <string name="sftp_filter_rotation">회전</string>
+    <string name="sftp_filter_title">필터</string>
+    <string name="sftp_fullscreen_preview">전체 화면 미리보기</string>
+    <string name="sftp_paste_discard">버리기</string>
+    <string name="sftp_paste_discard_body">대기 중인 파일이 대기열에서 제거됩니다. 이 작업은 취소할 수 없습니다.</string>
+    <string name="sftp_paste_discard_title">완료되지 않은 붙여넣기를 버릴까요?</string>
+    <string name="sftp_paste_keep">유지</string>
+    <string name="sftp_paste_resume">재개</string>
+    <string name="sftp_preview_frame_desc">미리보기 프레임 — 전체 화면을 보려면 탭하세요</string>
+    <string name="sftp_preview_play5s">5초 미리보기 재생</string>
+    <string name="sftp_preview_preparing">준비 중…</string>
+    <string name="sftp_preview_stop">정지</string>
 </resources>
