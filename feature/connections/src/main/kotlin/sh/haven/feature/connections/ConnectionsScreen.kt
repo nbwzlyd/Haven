@@ -65,6 +65,8 @@ import androidx.compose.material.icons.filled.VpnLock
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Card
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -735,6 +737,9 @@ fun ConnectionsScreen(
                 ) {
                     val activeDistroId by viewModel.activeDistroId.collectAsState()
                     val rootfsSetupState by viewModel.rootfsSetupState.collectAsState()
+                    var distroToDelete by remember {
+                        mutableStateOf<sh.haven.core.local.proot.Distro?>(null)
+                    }
                     DesktopManagerSection(
                         installedDesktops = viewModel.installedDesktops,
                         desktopStates = desktopStates,
@@ -745,11 +750,38 @@ fun ConnectionsScreen(
                         rootfsSetupState = rootfsSetupState,
                         onSwitchDistro = { id -> viewModel.switchActiveDistro(id) },
                         onAddDistro = { distro -> viewModel.addDistro(distro) },
+                        onDeleteDistro = { distro -> distroToDelete = distro },
                         onInstall = { de -> setupDesktopDe = de },
                         onStart = { de -> viewModel.startDesktop(de) },
                         onStop = { de -> viewModel.stopDesktop(de) },
                         onUninstall = { de -> viewModel.uninstallDesktop(de) },
                     )
+                    distroToDelete?.let { distro ->
+                        AlertDialog(
+                            onDismissRequest = { distroToDelete = null },
+                            title = { Text("Delete ${distro.label}?") },
+                            text = {
+                                Text(
+                                    "Removes the ${distro.label} rootfs and all installed " +
+                                        "desktops + packages on it. Any data in /root is lost. " +
+                                        "You can re-add this distro later.",
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.deleteDistro(distro.id)
+                                        distroToDelete = null
+                                    },
+                                ) { Text("Delete") }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { distroToDelete = null }) {
+                                    Text("Cancel")
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -877,9 +909,13 @@ fun ConnectionsScreen(
                 viewModel.resetDesktopSetupState()
             }
         }
+        val activeDistroIdForDialog by viewModel.activeDistroId.collectAsState()
+        val activeFamily = sh.haven.core.local.proot.DistroCatalog
+            .lookup(activeDistroIdForDialog)?.family
         DesktopSetupDialog(
             desktopState = desktopSetupState,
             selectedDe = de,
+            activeFamily = activeFamily,
             onStart = { password, _, addons ->
                 viewModel.setupDesktop(password, de, addons)
             },
@@ -1877,6 +1913,7 @@ private fun DesktopManagerSection(
     rootfsSetupState: sh.haven.core.local.ProotManager.SetupState,
     onSwitchDistro: (String) -> Unit,
     onAddDistro: (sh.haven.core.local.proot.Distro) -> Unit,
+    onDeleteDistro: (sh.haven.core.local.proot.Distro) -> Unit,
     onInstall: (sh.haven.core.local.ProotManager.DesktopEnvironment) -> Unit,
     onStart: (sh.haven.core.local.ProotManager.DesktopEnvironment) -> Unit,
     onStop: (sh.haven.core.local.ProotManager.DesktopEnvironment) -> Unit,
@@ -1934,9 +1971,31 @@ private fun DesktopManagerSection(
                                         onSwitchDistro(distro.id)
                                         distroMenuOpen = false
                                     },
-                                    trailingIcon = if (distro.id == activeDistroId) {
-                                        { Icon(Icons.Filled.Check, contentDescription = null) }
-                                    } else null,
+                                    trailingIcon = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            if (distro.id == activeDistroId) {
+                                                Icon(
+                                                    Icons.Filled.Check,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(20.dp),
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    distroMenuOpen = false
+                                                    onDeleteDistro(distro)
+                                                },
+                                                modifier = Modifier.size(32.dp),
+                                            ) {
+                                                Icon(
+                                                    Icons.Filled.Delete,
+                                                    contentDescription = "Delete ${distro.label}",
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
+                                        }
+                                    },
                                 )
                             }
                             if (availableDistros.isNotEmpty() && installedDistros.isNotEmpty()) {
@@ -1977,13 +2036,55 @@ private fun DesktopManagerSection(
                                 color = MaterialTheme.colorScheme.primary,
                             )
                         }
-                        is sh.haven.core.local.ProotManager.SetupState.Error -> {
+                        is sh.haven.core.local.ProotManager.SetupState.Initializing -> {
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "Rootfs install failed: ${s.message}",
+                                "Setting up rootfs… (${s.step})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        is sh.haven.core.local.ProotManager.SetupState.Error -> {
+                            Spacer(Modifier.height(4.dp))
+                            // Phase attribution chip — tells the user
+                            // which layer of the install failed without
+                            // making them parse a stack trace.
+                            val phaseLabel = when (s.phase) {
+                                sh.haven.core.local.ProotManager.Phase.RootfsDownload -> "Download"
+                                sh.haven.core.local.ProotManager.Phase.RootfsExtract -> "Extract"
+                                sh.haven.core.local.ProotManager.Phase.BootstrapHook -> "Bootstrap hook"
+                                sh.haven.core.local.ProotManager.Phase.Baseline -> "Baseline packages"
+                            }
+                            AssistChip(
+                                onClick = {},
+                                label = { Text("Failed: $phaseLabel", style = MaterialTheme.typography.labelSmall) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    labelColor = MaterialTheme.colorScheme.onErrorContainer,
+                                ),
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                s.message,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
+                            if (s.logTail.isNotEmpty()) {
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    s.logTail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 8,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Full per-phase history: Settings → View PRoot install log.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         else -> { /* Ready / NotInstalled — silent */ }
                     }
@@ -2009,6 +2110,7 @@ private fun DesktopManagerSection(
                         isInstalled = isInstalled,
                         instance = instance,
                         isSetupBusy = desktopSetupState is sh.haven.core.local.ProotManager.DesktopSetupState.Installing,
+                        activeFamily = activeDistro?.family,
                         onInstall = { onInstall(de) },
                         onStart = { onStart(de) },
                         onStop = { onStop(de) },
@@ -2026,11 +2128,14 @@ private fun DesktopRow(
     isInstalled: Boolean,
     instance: sh.haven.core.local.DesktopManager.DesktopInstance?,
     isSetupBusy: Boolean = false,
+    activeFamily: sh.haven.core.local.proot.PackageFamily? = null,
     onInstall: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onUninstall: () -> Unit,
 ) {
+    val compatibility = activeFamily?.let { de.spec.compatibilityOn(it) }
+        ?: sh.haven.core.local.proot.Compatibility.Stable
     var showUninstallConfirm by remember { mutableStateOf(false) }
 
     if (showUninstallConfirm) {
@@ -2072,7 +2177,20 @@ private fun DesktopRow(
         Spacer(Modifier.width(8.dp))
 
         Column(modifier = Modifier.weight(1f)) {
-            Text(de.label, style = MaterialTheme.typography.bodyMedium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(de.label, style = MaterialTheme.typography.bodyMedium)
+                if (compatibility == sh.haven.core.local.proot.Compatibility.Experimental) {
+                    Spacer(Modifier.width(6.dp))
+                    // Discoverable BEFORE the user taps Install —
+                    // don't make them learn it from a post-failure
+                    // error message.
+                    Text(
+                        "experimental",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
             when {
                 instance?.state == sh.haven.core.local.DesktopManager.DesktopState.RUNNING && !de.isNative ->
                     Text(
@@ -2137,10 +2255,14 @@ private fun DesktopRow(
 private fun DesktopSetupDialog(
     desktopState: sh.haven.core.local.ProotManager.DesktopSetupState,
     selectedDe: sh.haven.core.local.ProotManager.DesktopEnvironment,
+    activeFamily: sh.haven.core.local.proot.PackageFamily? = null,
     onStart: (password: String, de: sh.haven.core.local.ProotManager.DesktopEnvironment, addons: Set<sh.haven.core.local.ProotManager.DesktopAddon>) -> Unit,
     onShellSelected: (String) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
+    val compatibility = activeFamily?.let { selectedDe.spec.compatibilityOn(it) }
+        ?: sh.haven.core.local.proot.Compatibility.Stable
+    val compatibilityNote = activeFamily?.let { selectedDe.spec.compatibilityNoteOn(it) }
     var password by rememberSaveable { mutableStateOf("haven") }
     var shellCmd by rememberSaveable { mutableStateOf("/bin/sh") }
     var selectedAddons by remember {
@@ -2159,6 +2281,31 @@ private fun DesktopSetupDialog(
                             "${selectedDe.label} (${selectedDe.sizeEstimate})",
                             style = MaterialTheme.typography.titleSmall,
                         )
+                        // Surface compatibility warning BEFORE the
+                        // user taps Install. For Void/xbps this is
+                        // the difference between an honest "may not
+                        // work" and a wall of post-failure log tail.
+                        if (compatibility == sh.haven.core.local.proot.Compatibility.Experimental && compatibilityNote != null) {
+                            Surface(
+                                shape = MaterialTheme.shapes.small,
+                                color = MaterialTheme.colorScheme.tertiaryContainer,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Text(
+                                        "Experimental on ${activeFamily.name}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        compatibilityNote,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    )
+                                }
+                            }
+                        }
                         Text(
                             when {
                                 selectedDe.isWayland -> stringResource(R.string.connections_desktop_wayland_description)
@@ -2251,11 +2398,45 @@ private fun DesktopSetupDialog(
                         Text(stringResource(R.string.connections_desktop_installed))
                     }
                     is sh.haven.core.local.ProotManager.DesktopSetupState.Error -> {
-                        Text(
-                            stringResource(R.string.connections_desktop_setup_failed, desktopState.message),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+                        // Phase attribution chip — distinguishes
+                        // "packages couldn't install" (mirror flake,
+                        // nested-chroot INSTALL script) from "VNC
+                        // config write failed" without making the
+                        // user parse the log tail.
+                        val phaseLabel = when (desktopState.phase) {
+                            sh.haven.core.local.ProotManager.DePhase.Packages -> "Packages"
+                            sh.haven.core.local.ProotManager.DePhase.VncConfig -> "VNC config"
+                            sh.haven.core.local.ProotManager.DePhase.Marker -> "Marker file"
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            AssistChip(
+                                onClick = {},
+                                label = { Text("Failed: $phaseLabel", style = MaterialTheme.typography.labelSmall) },
+                                colors = AssistChipDefaults.assistChipColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    labelColor = MaterialTheme.colorScheme.onErrorContainer,
+                                ),
+                            )
+                            Text(
+                                stringResource(R.string.connections_desktop_setup_failed, desktopState.message),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            if (desktopState.logTail.isNotEmpty()) {
+                                Text(
+                                    desktopState.logTail,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 10,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                )
+                            }
+                            Text(
+                                "Full per-phase history: Settings → View PRoot install log.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }

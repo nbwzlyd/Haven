@@ -1443,6 +1443,23 @@ class ConnectionsViewModel @Inject constructor(
     }
 
     /**
+     * Delete a distro's rootfs. Reclaims the disk space and is the
+     * recovery path when an install lands in a broken state. If the
+     * deleted distro was active, ProotManager switches to the first
+     * remaining installed one. Also stops any running DEs on the
+     * deleted distro since their rootfs is about to disappear.
+     */
+    fun deleteDistro(distroId: String) {
+        val pm = localSessionManager.prootManager
+        // Stop any DEs running on the doomed distro before pulling
+        // the rootfs out from under them.
+        if (pm.activeDistroId == distroId) {
+            localSessionManager.desktopManager.stopAll()
+        }
+        pm.deleteDistro(distroId)
+    }
+
+    /**
      * Make [distro] the active distro and install its rootfs. The
      * common path for "+ Add another distro" — selecting one already
      * installed just switches to it via [switchActiveDistro]; this

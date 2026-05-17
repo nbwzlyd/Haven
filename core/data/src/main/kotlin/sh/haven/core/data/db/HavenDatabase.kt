@@ -11,6 +11,7 @@ import sh.haven.core.data.db.entities.ConnectionProfile
 import sh.haven.core.data.db.entities.KnownHost
 import sh.haven.core.data.db.entities.PasteQueueEntry
 import sh.haven.core.data.db.entities.PortForwardRule
+import sh.haven.core.data.db.entities.ProotInstallLog
 import sh.haven.core.data.db.entities.SshKey
 import sh.haven.core.data.db.entities.StepCaConfig
 import sh.haven.core.data.db.entities.SyncProfile
@@ -33,8 +34,9 @@ import sh.haven.core.data.db.entities.WorkspaceProfile
         WorkspaceItem::class,
         StepCaConfig::class,
         SyncProfile::class,
+        ProotInstallLog::class,
     ],
-    version = 54,
+    version = 55,
     exportSchema = true,
 )
 abstract class HavenDatabase : RoomDatabase() {
@@ -50,6 +52,7 @@ abstract class HavenDatabase : RoomDatabase() {
     abstract fun workspaceDao(): WorkspaceDao
     abstract fun stepCaConfigDao(): StepCaConfigDao
     abstract fun syncProfileDao(): SyncProfileDao
+    abstract fun prootInstallLogDao(): ProotInstallLogDao
 
     companion object {
         val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -830,6 +833,37 @@ abstract class HavenDatabase : RoomDatabase() {
                         PRIMARY KEY(`id`)
                     )
                     """.trimIndent()
+                )
+            }
+        }
+
+        /**
+         * Durable per-phase install log for the proot distro/DE pipeline
+         * (issue #162 Phase 3b). One row per state transition + completion
+         * + failure; logTail carries up to ~1500 chars of failing-command
+         * output. Replaces the previous reliance on `adb logcat` for
+         * post-mortem of install failures.
+         */
+        val MIGRATION_54_55 = object : Migration(54, 55) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `proot_install_log` (
+                        `id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        `distroId` TEXT NOT NULL,
+                        `timestamp` INTEGER NOT NULL,
+                        `phase` TEXT NOT NULL,
+                        `deId` TEXT,
+                        `exit` INTEGER,
+                        `ok` INTEGER NOT NULL,
+                        `message` TEXT,
+                        `logTail` TEXT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_proot_install_log_distroId` " +
+                        "ON `proot_install_log` (`distroId`)",
                 )
             }
         }

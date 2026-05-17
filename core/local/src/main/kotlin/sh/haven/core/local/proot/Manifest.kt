@@ -75,6 +75,23 @@ data class RootfsHook(
 )
 
 /**
+ * How well a DE works on a particular [PackageFamily].
+ *
+ *  - [Stable]: the install path and the running desktop have been
+ *    verified end-to-end. Default for entries that don't declare.
+ *  - [Experimental]: known limitations or fragile install steps;
+ *    the rootfs side works but the DE install may fail or run
+ *    degraded. Surface a warning at install time.
+ *  - [Broken]: known not to work on this family today. Hidden from
+ *    the install picker by default; reserved for future revival.
+ *
+ * Per-family granularity matters because xbps's nested-chroot
+ * INSTALL-script semantics break X11 packages on Void (fontconfig
+ * pre-INSTALL), but those same DEs install fine on Arch/Debian.
+ */
+enum class Compatibility { Stable, Experimental, Broken }
+
+/**
  * Launch dispatch — how a DE actually runs once its packages are
  * installed. Maps 1:1 to the branches in `DesktopManager`.
  *
@@ -109,7 +126,26 @@ data class DesktopEnvironmentSpec(
     val sizeEstimateMb: Int,
     val minFreeMb: Int = sizeEstimateMb * 2,
     val hidden: Boolean = false,
-)
+    /**
+     * Per-family compatibility tag. Families not listed default to
+     * [Compatibility.Stable]. Use [compatibilityOn] to read this for
+     * a specific family — it returns Stable for unmapped entries.
+     */
+    val compatibility: Map<PackageFamily, Compatibility> = emptyMap(),
+    /**
+     * Free-text note shown alongside an Experimental / Broken label,
+     * keyed by family. E.g. for Xfce4 on Void: "xbps runs INSTALL
+     * scripts in a nested chroot that proot can't satisfy; CLI works
+     * but desktop install fails on fontconfig".
+     */
+    val compatibilityNote: Map<PackageFamily, String> = emptyMap(),
+) {
+    fun compatibilityOn(family: PackageFamily): Compatibility =
+        compatibility[family] ?: Compatibility.Stable
+
+    fun compatibilityNoteOn(family: PackageFamily): String? =
+        compatibilityNote[family]
+}
 
 /**
  * Data class form of a distro. Phase 1 ships with `alpine-3.21`
@@ -177,7 +213,170 @@ object DistroCatalog {
         sizeEstimateMb = 130,
     )
 
-    val all: List<Distro> = listOf(ALPINE_3_21, DEBIAN_BOOKWORM)
+    /**
+     * Arch Linux ARM — rolling-release, pacman, popular among
+     * power users and the only mainstream distro with first-class
+     * Hyprland/niri/Sway packaging out of the box. The tarball
+     * already has /etc/pacman.d/gnupg populated by proot-distro
+     * so we don't need to run `pacman-key --init` ourselves —
+     * which is a relief, since gpg keyring generation inside a
+     * fresh proot is slow (minutes) and needs haveged-style
+     * entropy.
+     *
+     * The post-extract hook regenerates the en_US.UTF-8 locale so
+     * desktop apps don't whine about missing LC_*.
+     */
+    val ARCH_LINUX = Distro(
+        id = "archlinux",
+        label = "Arch Linux",
+        family = PackageFamily.PACMAN,
+        rootfsSources = mapOf(
+            Arch.AARCH64 to RootfsSource(
+                url = "https://github.com/termux/proot-distro/releases/download/v4.34.2/archlinux-aarch64-pd-v4.34.2.tar.xz",
+                sha256 = "dabc2382ddcb725969cf7b9e2f3b102ec862ea6e0294198a30c71e9a4b837f81",
+                format = RootfsFormat.TAR_XZ,
+                stripComponents = 1,
+            ),
+            Arch.X86_64 to RootfsSource(
+                url = "https://github.com/termux/proot-distro/releases/download/v4.34.2/archlinux-x86_64-pd-v4.34.2.tar.xz",
+                sha256 = "5829c102ff1789d0e026ede65685221433e0b5c18002e70471a52b752c761be2",
+                format = RootfsFormat.TAR_XZ,
+                stripComponents = 1,
+            ),
+        ),
+        baselinePackages = listOf("bash", "curl", "ca-certificates", "openssh", "tmux"),
+        postExtractHooks = listOf(
+            // Arch's proot-distro tarball is a snapshot of the rolling
+            // repo at build time. By the time a user installs it, the
+            // archived package names may have drifted (libstdc++ rolled
+            // into gcc-libs, spirv-tools deps changed, etc.) — subsequent
+            // `pacman -S xfce4` fails with "unable to satisfy dependency"
+            // because the tarball-version of xfwm4 chains into renamed
+            // packages. Doing a full-system upgrade at install time
+            // brings the rootfs in sync with current repos so DE
+            // installs resolve cleanly. Cost: 200-500 MB extra download
+            // on first install, paid once.
+            RootfsHook(
+                id = "pacman -Syu",
+                command = "rm -f /var/lib/pacman/db.lck; pacman -Syu --noconfirm",
+            ),
+            RootfsHook(
+                id = "locale-gen en_US.UTF-8",
+                command = "sed -i -E 's/#[[:space:]]?(en_US.UTF-8[[:space:]]+UTF-8)/\\1/g' /etc/locale.gen && locale-gen",
+            ),
+        ),
+        sizeEstimateMb = 250,
+    )
+
+    /**
+     * Void Linux (glibc flavour). xbps-based, much smaller than
+     * Arch but with a comparable rolling-release model.
+     * proot-distro's tarball ships the glibc variant; the musl
+     * variant is a separate distro id we could add later if there's
+     * demand.
+     */
+    val VOID_LINUX = Distro(
+        id = "void",
+        label = "Void Linux",
+        family = PackageFamily.XBPS,
+        rootfsSources = mapOf(
+            Arch.AARCH64 to RootfsSource(
+                url = "https://github.com/termux/proot-distro/releases/download/v4.29.0/void-aarch64-pd-v4.29.0.tar.xz",
+                sha256 = "7a7c449b3efe504749e40f556d13812010bccc930a820a56973a0f5fc2f16997",
+                format = RootfsFormat.TAR_XZ,
+                stripComponents = 1,
+            ),
+            Arch.X86_64 to RootfsSource(
+                url = "https://github.com/termux/proot-distro/releases/download/v4.29.0/void-x86_64-pd-v4.29.0.tar.xz",
+                sha256 = "2853b9433b9051aa2512e7376a71736196fb3241eb90ba11110c6e867854c666",
+                format = RootfsFormat.TAR_XZ,
+                stripComponents = 1,
+            ),
+        ),
+        baselinePackages = listOf("bash", "curl", "ca-certificates", "openssh", "tmux"),
+        postExtractHooks = listOf(
+            // Void's xbps refuses to install any user package until
+            // xbps itself is current — and its self-update is
+            // genuinely circular inside proot (the version check
+            // aborts the unpack of its own replacement). We bypass
+            // the broken path: pull the current xbps, libxbps and
+            // libssl3 .xbps archives straight from the repo and
+            // untar them over the rootfs. Versions are resolved
+            // dynamically from the repo's own index.plist so the
+            // hook stays correct as Void rolls.
+            RootfsHook(
+                id = "bootstrap xbps from repo",
+                command = """
+                    set -ex
+                    # Three-step bootstrap that bypasses Void's broken
+                    # self-update in proot:
+                    #   (1) xbps-install -D downloads new .xbps archives
+                    #       without running the self-update transaction
+                    #   (2) tar extracts the new xbps/libxbps/libssl3
+                    #       binaries+libs over the rootfs
+                    #   (3) sed patches the package DB to claim the new
+                    #       versions, so xbps's "must be updated" check
+                    #       passes on subsequent user-package installs
+                    # Without (3) the binary on disk is new but pkgdb
+                    # still says 0.60.5 — xbps reads the version from
+                    # pkgdb and the check still fails. With (3) the
+                    # check sees installed=repo and unblocks installs.
+                    rm -f /var/db/xbps/*.lock /var/cache/xbps/*.lock 2>/dev/null || true
+
+                    # (1) Download. `-D` is download-only; `-S` syncs the
+                    # repodata. xbps's own fetcher — no curl needed.
+                    # libcrypto3 is included because libssl3 SONAME-pairs
+                    # with it; bumping one without the other leaves the
+                    # next install with a "breaks installed pkg" conflict.
+                    xbps-install -DSy xbps libxbps libssl3 libcrypto3
+
+                    # Resolve the new versions from the synced repo.
+                    NEW_XBPS=${'$'}(xbps-query -R --property pkgver xbps 2>/dev/null | head -1 | sed 's/xbps-//')
+                    NEW_LIBXBPS=${'$'}(xbps-query -R --property pkgver libxbps 2>/dev/null | head -1 | sed 's/libxbps-//')
+                    NEW_LIBSSL=${'$'}(xbps-query -R --property pkgver libssl3 2>/dev/null | head -1 | sed 's/libssl3-//')
+                    NEW_LIBCRYPTO=${'$'}(xbps-query -R --property pkgver libcrypto3 2>/dev/null | head -1 | sed 's/libcrypto3-//')
+                    echo "bootstrap target versions: xbps=${'$'}NEW_XBPS libxbps=${'$'}NEW_LIBXBPS libssl3=${'$'}NEW_LIBSSL libcrypto3=${'$'}NEW_LIBCRYPTO"
+
+                    # (2) Extract over rootfs.
+                    for pkg in xbps libxbps libssl3 libcrypto3; do
+                        archive=${'$'}(ls -t /var/cache/xbps/${'$'}{pkg}-*.xbps 2>/dev/null | head -1)
+                        if [ -z "${'$'}archive" ]; then
+                            echo "no ${'$'}pkg .xbps downloaded — skipping" >&2
+                            continue
+                        fi
+                        echo "extracting ${'$'}archive"
+                        tar --zstd -xf "${'$'}archive" -C / \
+                            --exclude=./files.plist \
+                            --exclude=./props.plist \
+                            --exclude=./INSTALL \
+                            --exclude=./REMOVE \
+                            --exclude=./pubkey.plist 2>/dev/null || true
+                    done
+
+                    # (3) Patch pkgdb so xbps's version check passes.
+                    PKGDB=${'$'}(ls /var/db/xbps/pkgdb-*.plist 2>/dev/null | head -1)
+                    if [ -n "${'$'}PKGDB" ]; then
+                        [ -n "${'$'}NEW_XBPS" ] && \
+                            sed -i "s|<string>xbps-[0-9._]\\+</string>|<string>xbps-${'$'}{NEW_XBPS}</string>|g" "${'$'}PKGDB"
+                        [ -n "${'$'}NEW_LIBXBPS" ] && \
+                            sed -i "s|<string>libxbps-[0-9._]\\+</string>|<string>libxbps-${'$'}{NEW_LIBXBPS}</string>|g" "${'$'}PKGDB"
+                        [ -n "${'$'}NEW_LIBSSL" ] && \
+                            sed -i "s|<string>libssl3-[0-9._]\\+</string>|<string>libssl3-${'$'}{NEW_LIBSSL}</string>|g" "${'$'}PKGDB"
+                        [ -n "${'$'}NEW_LIBCRYPTO" ] && \
+                            sed -i "s|<string>libcrypto3-[0-9._]\\+</string>|<string>libcrypto3-${'$'}{NEW_LIBCRYPTO}</string>|g" "${'$'}PKGDB"
+                        echo "patched ${'$'}PKGDB"
+                    fi
+                """.trimIndent(),
+            ),
+            RootfsHook(
+                id = "refresh-ca-certificates",
+                command = "update-ca-certificates --fresh || true",
+            ),
+        ),
+        sizeEstimateMb = 100,
+    )
+
+    val all: List<Distro> = listOf(ALPINE_3_21, DEBIAN_BOOKWORM, ARCH_LINUX, VOID_LINUX)
 
     fun lookup(id: String): Distro? = all.firstOrNull { it.id == id }
 
@@ -198,12 +397,30 @@ object DesktopCatalog {
                 "tigervnc-standalone-server", "openbox", "xterm", "x11-xserver-utils",
                 "fonts-noto-core",
             ),
+            // Arch: tigervnc (the standalone server is bundled in the
+            // main package), xorg-xsetroot for the solid root colour.
+            PackageFamily.PACMAN to listOf(
+                "tigervnc", "openbox", "xterm", "xorg-xsetroot", "noto-fonts",
+            ),
+            // Void: same shapes as Arch. `noto-fonts-ttf` is the Void
+            // package name (`noto-fonts` is the Arch / Debian name).
+            PackageFamily.XBPS to listOf(
+                "tigervnc", "openbox", "xterm", "xsetroot", "noto-fonts-ttf",
+            ),
         ),
         verifyBinary = "usr/bin/openbox",
         launch = LaunchSpec.X11Vnc(
             startCommands = "xsetroot -solid '#2e3440'; openbox & xterm &",
         ),
         sizeEstimateMb = 10,
+        compatibility = mapOf(
+            PackageFamily.XBPS to Compatibility.Experimental,
+        ),
+        compatibilityNote = mapOf(
+            PackageFamily.XBPS to "Void's xbps runs per-package INSTALL scripts in a nested " +
+                "chroot that proot can't satisfy. CLI works; X11 desktop install may fail on " +
+                "fontconfig. Nested-Wayland DEs (planned in Phase 4) sidestep this.",
+        ),
     )
 
     val XFCE4 = DesktopEnvironmentSpec(
@@ -218,12 +435,30 @@ object DesktopCatalog {
                 "tigervnc-standalone-server", "xfce4", "xfce4-terminal", "dbus-x11",
                 "fonts-noto-core",
             ),
+            // Arch: xfce4 is a group; we list the same component packages
+            // proot-distro's xfce wrapper uses. dbus on Arch is the
+            // bundled bus daemon; dbus-x11 isn't a separate package.
+            PackageFamily.PACMAN to listOf(
+                "tigervnc", "xfce4", "xfce4-terminal", "dbus", "noto-fonts",
+            ),
+            // Void: `noto-fonts-ttf` not `noto-fonts`.
+            PackageFamily.XBPS to listOf(
+                "tigervnc", "xfce4", "xfce4-terminal", "dbus", "noto-fonts-ttf",
+            ),
         ),
         verifyBinary = "usr/bin/startxfce4",
         launch = LaunchSpec.X11Vnc(
             startCommands = "xfwm4 & xfce4-panel & xfdesktop &",
         ),
         sizeEstimateMb = 100,
+        compatibility = mapOf(
+            PackageFamily.XBPS to Compatibility.Experimental,
+        ),
+        compatibilityNote = mapOf(
+            PackageFamily.XBPS to "Void's xbps runs per-package INSTALL scripts in a nested " +
+                "chroot that proot can't satisfy. CLI works; X11 desktop install may fail on " +
+                "fontconfig. Nested-Wayland DEs (planned in Phase 4) sidestep this.",
+        ),
     )
 
     val LABWC_NATIVE = DesktopEnvironmentSpec(

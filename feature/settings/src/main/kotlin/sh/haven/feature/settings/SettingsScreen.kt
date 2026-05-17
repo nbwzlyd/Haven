@@ -177,6 +177,7 @@ fun SettingsScreen(
     val waylandShellCommand by viewModel.waylandShellCommand.collectAsState()
     val mediaExtensions by viewModel.mediaExtensions.collectAsState()
     var showAuditLog by remember { mutableStateOf(false) }
+    var showProotInstallLog by remember { mutableStateOf(false) }
     var showAgentActivity by remember { mutableStateOf(false) }
     var showFontUrlDialog by remember { mutableStateOf(false) }
     // Lifted to SettingsScreen scope so a dialog's confirm handler can
@@ -286,6 +287,10 @@ fun SettingsScreen(
 
     if (showAuditLog) {
         AuditLogScreen(onBack = { showAuditLog = false })
+        return
+    }
+    if (showProotInstallLog) {
+        ProotInstallLogScreen(onBack = { showProotInstallLog = false })
         return
     }
     if (showAgentActivity) {
@@ -589,6 +594,12 @@ fun SettingsScreen(
                 title = stringResource(R.string.settings_view_connection_log_title),
                 subtitle = stringResource(R.string.settings_view_connection_log_subtitle),
                 onClick = { showAuditLog = true },
+            )
+            SettingsItem(
+                icon = Icons.Filled.ListAlt,
+                title = "View PRoot install log",
+                subtitle = "Per-phase events from Linux distro installs (issue #162)",
+                onClick = { showProotInstallLog = true },
             )
             SettingsToggleItem(
                 icon = Icons.Filled.BugReport,

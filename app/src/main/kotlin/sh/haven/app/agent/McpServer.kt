@@ -105,6 +105,7 @@ class McpServer @Inject constructor(
     private val servedFileTracker: sh.haven.core.data.agent.ServedFileTracker,
     private val syncProfileRepository: sh.haven.core.data.repository.SyncProfileRepository,
     private val terminalInputQueue: TerminalInputQueue,
+    private val prootInstallLogRepository: sh.haven.core.data.repository.ProotInstallLogRepository,
 ) : Closeable {
 
     /**
@@ -200,6 +201,7 @@ class McpServer @Inject constructor(
         servedFileTracker = servedFileTracker,
         syncProfileRepository = syncProfileRepository,
         terminalInputQueue = terminalInputQueue,
+        prootInstallLogRepository = prootInstallLogRepository,
     )
 
     /**

@@ -2,6 +2,22 @@
 # Log4j2, and Unix sockets which are unavailable on Android)
 -ignorewarnings
 
+# Phase 2/3 distro infrastructure — keep class + member names so the
+# tagged Log.d / Log.e lines stay diagnosable when users hit edge
+# cases (stale pacman DB, partial pacman -Syu, etc.). Without this,
+# R8 can rename the classes/methods and stack-traces from these
+# code paths become impossible to map back to source.
+-keep class sh.haven.core.local.ProotManager { *; }
+-keep class sh.haven.core.local.DesktopManager { *; }
+-keep class sh.haven.core.local.LocalSessionManager { *; }
+-keep class sh.haven.core.local.proot.** { *; }
+
+# Defensive: if any future AGP / library bump adds an
+# `-assumenosideeffects class android.util.Log { ... }` rule (which
+# would strip log calls entirely from release builds), pin our
+# critical Log statements here. As of AGP 8.9.1's
+# proguard-android-optimize.txt no such rule ships.
+
 # Keep crypto classes
 -keep class javax.crypto.** { *; }
 -keep class java.security.** { *; }

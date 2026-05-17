@@ -5,8 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.webkit.MimeTypeMap
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -73,6 +76,7 @@ internal class McpTools(
     private val servedFileTracker: sh.haven.core.data.agent.ServedFileTracker,
     private val syncProfileRepository: sh.haven.core.data.repository.SyncProfileRepository,
     private val terminalInputQueue: TerminalInputQueue,
+    private val prootInstallLogRepository: sh.haven.core.data.repository.ProotInstallLogRepository,
 ) {
 
     /**
@@ -985,6 +989,156 @@ internal class McpTools(
             },
             consentLevel = ConsentLevel.NEVER,
         ) { args -> openLocalShell(args) },
+
+        // --- proot distro / desktop environment tools (issue #162 Phase 3b) ---
+        // These let an agent (and the Settings → PRoot install log page)
+        // drive and observe the proot install pipeline without ADB or
+        // logcat. Failures land in the Room-backed log so they survive
+        // app restarts and rotated logcat buffers.
+
+        "inspect_proot" to ToolHandler(
+            description = "Single rich read of the proot subsystem: active distro id, every Distro (id, label, family, installed, sizeMb, bytesOnDisk, postExtractHookIds), every DesktopEnvironment with per-family Stable/Experimental/Broken compatibility and Experimental notes, current osSetupState (phase / step / progress / errorPhase / errorMessage / errorTail), current desktopSetupState (phase / errorMessage / errorTail), and the last 50 install-log events. The single endpoint to drive issue #162 verification.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("eventLimit", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Max install-log events to return. Default 50.")
+                    })
+                })
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> inspectProot(args) },
+
+        "list_distros" to ToolHandler(
+            description = "Slim distro-only read of inspect_proot. Returns each Distro with installed/active/sizeMb/family. Use this when you only need the catalog and not the live state or log events.",
+            inputSchema = emptyObjectSchema(),
+            consentLevel = ConsentLevel.NEVER,
+        ) { _ -> listDistros() },
+
+        "list_desktop_environments" to ToolHandler(
+            description = "Slim DE-only read of inspect_proot. Filters to DEs that have a package list for the active distro's family (matches the UI filter). Each entry includes per-family compatibility (Stable/Experimental/Broken), an Experimental note when relevant, installed?, and running? state.",
+            inputSchema = emptyObjectSchema(),
+            consentLevel = ConsentLevel.NEVER,
+        ) { _ -> listDesktopEnvironments() },
+
+        "install_distro" to ToolHandler(
+            description = "Set the given distro as active and trigger installRootfs(). Returns immediately; poll `inspect_proot.osSetupState` for progress (Downloading → Extracting → BootstrapHook → Baseline → Ready, or Error with attribution). Idempotent: if the distro is already installed, just switches active.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("distroId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Distro id from DistroCatalog (e.g. \"alpine-3.21\", \"debian-bookworm\", \"archlinux\", \"void-musl\").")
+                    })
+                })
+                put("required", JSONArray().put("distroId"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                val id = args.optString("distroId")
+                val d = sh.haven.core.local.proot.DistroCatalog.lookup(id)
+                if (d != null) "Install Linux distribution \"${d.label}\" (≈${d.sizeEstimateMb} MB download)?"
+                else "Install distro \"$id\"?"
+            },
+        ) { args -> installDistro(args) },
+
+        "delete_distro" to ToolHandler(
+            description = "Wipe a distro's rootfs and remove all installed DEs on it. Stops any running DEs first. Destructive — frees the disk space and is also the recovery path when an install lands in a broken state.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("distroId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Distro id to delete.")
+                    })
+                })
+                put("required", JSONArray().put("distroId"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                val id = args.optString("distroId")
+                val d = sh.haven.core.local.proot.DistroCatalog.lookup(id)
+                if (d != null) "Delete \"${d.label}\" and all its data? This cannot be undone."
+                else "Delete distro \"$id\" and all its data? This cannot be undone."
+            },
+        ) { args -> deleteDistroTool(args) },
+
+        "install_desktop" to ToolHandler(
+            description = "Install a desktop environment on the active distro. Calls ProotManager.setupDesktop which downloads packages, configures VNC, and writes the launcher. Poll `inspect_proot.desktopSetupState` for progress. Failures are attributed to a DePhase (Packages / VncConfig / Marker) in both the state and the install log.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Desktop environment id (e.g. \"xfce4\", \"openbox\", \"labwc-native\").")
+                    })
+                    put("vncPassword", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "VNC password. Defaults to empty (SecurityTypes None).")
+                    })
+                })
+                put("required", JSONArray().put("deId"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                val deId = args.optString("deId")
+                val de = sh.haven.core.local.ProotManager.DesktopEnvironment.entries.firstOrNull { it.spec.id == deId }
+                val active = localSessionManager.prootManager.activeDistro
+                val family = active.family
+                val compat = de?.spec?.compatibilityOn(family)
+                val suffix = when (compat) {
+                    sh.haven.core.local.proot.Compatibility.Experimental -> " — experimental on ${family.name}"
+                    sh.haven.core.local.proot.Compatibility.Broken -> " — known broken on ${family.name}"
+                    else -> ""
+                }
+                val label = de?.label ?: deId
+                "Install ${label} on ${active.label}${suffix}?"
+            },
+        ) { args -> installDesktopTool(args) },
+
+        "uninstall_desktop" to ToolHandler(
+            description = "Remove a desktop environment from the active distro. Stops it first if running. Calls ProotManager.uninstallDesktop.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Desktop environment id to uninstall.")
+                    })
+                })
+                put("required", JSONArray().put("deId"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                val deId = args.optString("deId")
+                val de = sh.haven.core.local.ProotManager.DesktopEnvironment.entries.firstOrNull { it.spec.id == deId }
+                val active = localSessionManager.prootManager.activeDistro
+                "Uninstall ${de?.label ?: deId} from ${active.label}?"
+            },
+        ) { args -> uninstallDesktopTool(args) },
+
+        "get_proot_install_log" to ToolHandler(
+            description = "Return install-log events from the Room-backed ProotInstallLog table. Survives logcat rotation and app restarts. Filter by distroId and/or sinceMs (millis since epoch) to poll incrementally. Each event: id, timestamp, distroId, phase, deId?, exit?, ok, message?, logTail?.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("distroId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Filter to a single distro. Omit for all distros.")
+                    })
+                    put("sinceMs", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Return only events with timestamp > sinceMs. Default 0 (return all).")
+                    })
+                    put("limit", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Max events. Default 100.")
+                    })
+                })
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> getProotInstallLog(args) },
 
         "set_terminal_font_from_url" to ToolHandler(
             description = "Download a TTF/OTF font from a URL, validate it, install it as Haven's terminal font (replacing any prior custom font), and return the saved path. Useful for agent-driven Nerd Font installs (#123). Requires the URL to be reachable from the device — use a tunneled URL (via add_port_forward LOCAL) to expose a workstation HTTP server back through the existing SSH session.",
@@ -3910,6 +4064,375 @@ internal class McpTools(
          *   will edit further before pressing Enter themselves.
          */
         internal const val DEFAULT_SUBMIT_KEY = "\r"
+    }
+
+    // --- proot / desktop environment tool implementations (issue #162 Phase 3b) ---
+
+    private val prootManager get() = localSessionManager.prootManager
+
+    /** Background scope for fire-and-forget installs. Survives the tool
+     * call return so the agent can poll progress; SupervisorJob keeps
+     * one failing install from cancelling siblings. */
+    private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private fun distroToJson(
+        d: sh.haven.core.local.proot.Distro,
+        installed: Boolean,
+        active: Boolean,
+        bytesOnDisk: Long,
+    ): JSONObject = JSONObject().apply {
+        put("id", d.id)
+        put("label", d.label)
+        put("family", d.family.name)
+        put("installed", installed)
+        put("active", active)
+        put("sizeEstimateMb", d.sizeEstimateMb)
+        put("bytesOnDisk", bytesOnDisk)
+        put("baselinePackages", JSONArray().apply {
+            d.baselinePackages.forEach { put(it) }
+        })
+        put("postExtractHookIds", JSONArray().apply {
+            d.postExtractHooks.forEach { put(it.id) }
+        })
+        put("rootfsArches", JSONArray().apply {
+            d.rootfsSources.keys.forEach { put(it.abi) }
+        })
+    }
+
+    private fun rootfsBytesOnDisk(distroId: String): Long {
+        // Honor ProotManager's legacy-path fallback (alpine-3.21 → alpine).
+        val dir = prootManager.rootfsDirFor(distroId)
+        if (!dir.exists()) return 0L
+        // Cheap: just the top-level directory size — accurate to within
+        // the order of magnitude. Recursive du would block several
+        // seconds for a 100-MB rootfs.
+        return runCatching {
+            java.nio.file.Files.walk(dir.toPath()).use { stream ->
+                stream.filter { java.nio.file.Files.isRegularFile(it) }
+                    .mapToLong {
+                        runCatching { java.nio.file.Files.size(it) }.getOrDefault(0L)
+                    }
+                    .sum()
+            }
+        }.getOrDefault(0L)
+    }
+
+    private fun desktopToJson(
+        de: sh.haven.core.local.ProotManager.DesktopEnvironment,
+        activeFamily: sh.haven.core.local.proot.PackageFamily,
+        installed: Boolean,
+        running: Boolean,
+    ): JSONObject = JSONObject().apply {
+        put("id", de.spec.id)
+        put("label", de.label)
+        put("sizeEstimateMb", de.spec.sizeEstimateMb)
+        put("installed", installed)
+        put("running", running)
+        put("isNative", de.isNative)
+        put("isWayland", de.isWayland)
+        put("verifyBinary", de.spec.verifyBinary)
+        put("compatibility", de.spec.compatibilityOn(activeFamily).name)
+        de.spec.compatibilityNoteOn(activeFamily)?.let { put("compatibilityNote", it) }
+        val pkgs = de.spec.packagesPerFamily[activeFamily]
+        if (pkgs != null) {
+            put("packages", JSONArray().apply { pkgs.forEach { put(it) } })
+        } else {
+            put("packages", JSONObject.NULL)
+        }
+        put("packageFamilies", JSONArray().apply {
+            de.spec.packagesPerFamily.keys.forEach { put(it.name) }
+        })
+    }
+
+    private fun osSetupStateToJson(
+        state: sh.haven.core.local.ProotManager.SetupState,
+    ): JSONObject = JSONObject().apply {
+        when (state) {
+            is sh.haven.core.local.ProotManager.SetupState.NotInstalled -> {
+                put("phase", "NotInstalled")
+            }
+            is sh.haven.core.local.ProotManager.SetupState.Downloading -> {
+                put("phase", "Downloading")
+                put("percent", state.progress)
+            }
+            is sh.haven.core.local.ProotManager.SetupState.Extracting -> {
+                put("phase", "Extracting")
+            }
+            is sh.haven.core.local.ProotManager.SetupState.Initializing -> {
+                put("phase", "Initializing")
+                put("step", state.step)
+            }
+            is sh.haven.core.local.ProotManager.SetupState.Ready -> {
+                put("phase", "Ready")
+            }
+            is sh.haven.core.local.ProotManager.SetupState.Error -> {
+                put("phase", "Error")
+                put("errorPhase", state.phase.name)
+                put("errorMessage", state.message)
+                if (state.logTail.isNotEmpty()) put("errorTail", state.logTail)
+            }
+        }
+    }
+
+    private fun desktopSetupStateToJson(
+        state: sh.haven.core.local.ProotManager.DesktopSetupState,
+    ): JSONObject = JSONObject().apply {
+        when (state) {
+            is sh.haven.core.local.ProotManager.DesktopSetupState.Idle ->
+                put("phase", "Idle")
+            is sh.haven.core.local.ProotManager.DesktopSetupState.Installing -> {
+                put("phase", "Installing")
+                put("step", state.step)
+            }
+            is sh.haven.core.local.ProotManager.DesktopSetupState.Complete ->
+                put("phase", "Complete")
+            is sh.haven.core.local.ProotManager.DesktopSetupState.Error -> {
+                put("phase", "Error")
+                put("errorPhase", state.phase.name)
+                put("errorMessage", state.message)
+                if (state.logTail.isNotEmpty()) put("errorTail", state.logTail)
+            }
+        }
+    }
+
+    private fun installLogEventToJson(
+        e: sh.haven.core.data.db.entities.ProotInstallLog,
+    ): JSONObject = JSONObject().apply {
+        put("id", e.id)
+        put("timestamp", e.timestamp)
+        put("distroId", e.distroId)
+        put("phase", e.phase)
+        e.deId?.let { put("deId", it) }
+        if (e.exit != null) put("exit", e.exit) else put("exit", JSONObject.NULL)
+        put("ok", e.ok)
+        e.message?.let { put("message", it) }
+        e.logTail?.let { put("logTail", it) }
+    }
+
+    private suspend fun inspectProot(args: JSONObject): JSONObject {
+        val eventLimit = args.optInt("eventLimit", 50).coerceIn(1, 500)
+        val pm = prootManager
+        val active = pm.activeDistro
+        val installed = pm.installedDistros.map { it.id }.toSet()
+        val installedDes = pm.installedDesktops
+        val runningDes = localSessionManager.desktopManager.desktops.value.keys
+
+        val distrosJson = JSONArray().apply {
+            sh.haven.core.local.proot.DistroCatalog.all.forEach { d ->
+                put(
+                    distroToJson(
+                        d = d,
+                        installed = d.id in installed,
+                        active = d.id == active.id,
+                        bytesOnDisk = if (d.id in installed) rootfsBytesOnDisk(d.id) else 0L,
+                    ),
+                )
+            }
+        }
+        val desktopsJson = JSONArray().apply {
+            sh.haven.core.local.ProotManager.DesktopEnvironment.entries
+                .filter { !it.hidden }
+                .filter { active.family in it.spec.packagesPerFamily.keys }
+                .forEach { de ->
+                    put(
+                        desktopToJson(
+                            de = de,
+                            activeFamily = active.family,
+                            installed = de in installedDes,
+                            running = de in runningDes,
+                        ),
+                    )
+                }
+        }
+        val events = prootInstallLogRepository.querySince(
+            distroId = null,
+            sinceMs = 0L,
+            limit = eventLimit,
+        )
+        val eventsJson = JSONArray().apply {
+            // querySince returns ASC; reverse so the most recent event is at index 0
+            events.asReversed().forEach { put(installLogEventToJson(it)) }
+        }
+
+        return JSONObject().apply {
+            put("activeDistroId", active.id)
+            put("distros", distrosJson)
+            put("desktopEnvironments", desktopsJson)
+            put("osSetupState", osSetupStateToJson(pm.state.value))
+            put("desktopSetupState", desktopSetupStateToJson(pm.desktopState.value))
+            put("recentInstallLog", eventsJson)
+        }
+    }
+
+    private fun listDistros(): JSONObject {
+        val pm = prootManager
+        val active = pm.activeDistro
+        val installed = pm.installedDistros.map { it.id }.toSet()
+        val arr = JSONArray().apply {
+            sh.haven.core.local.proot.DistroCatalog.all.forEach { d ->
+                put(
+                    distroToJson(
+                        d = d,
+                        installed = d.id in installed,
+                        active = d.id == active.id,
+                        bytesOnDisk = if (d.id in installed) rootfsBytesOnDisk(d.id) else 0L,
+                    ),
+                )
+            }
+        }
+        return JSONObject().apply {
+            put("activeDistroId", active.id)
+            put("count", arr.length())
+            put("distros", arr)
+        }
+    }
+
+    private fun listDesktopEnvironments(): JSONObject {
+        val pm = prootManager
+        val active = pm.activeDistro
+        val installedDes = pm.installedDesktops
+        val runningDes = localSessionManager.desktopManager.desktops.value.keys
+        val arr = JSONArray().apply {
+            sh.haven.core.local.ProotManager.DesktopEnvironment.entries
+                .filter { !it.hidden }
+                .filter { active.family in it.spec.packagesPerFamily.keys }
+                .forEach { de ->
+                    put(
+                        desktopToJson(
+                            de = de,
+                            activeFamily = active.family,
+                            installed = de in installedDes,
+                            running = de in runningDes,
+                        ),
+                    )
+                }
+        }
+        return JSONObject().apply {
+            put("activeDistroId", active.id)
+            put("activeFamily", active.family.name)
+            put("count", arr.length())
+            put("desktopEnvironments", arr)
+        }
+    }
+
+    private suspend fun installDistro(args: JSONObject): JSONObject {
+        val distroId = args.optString("distroId").takeIf { it.isNotEmpty() }
+            ?: throw McpError(-32602, "distroId is required")
+        val target = sh.haven.core.local.proot.DistroCatalog.lookup(distroId)
+            ?: throw McpError(-32602, "Unknown distroId: $distroId")
+        val pm = prootManager
+        val wasInstalled = target.id in pm.installedDistros.map { it.id }
+        if (pm.activeDistroId != target.id) {
+            pm.setActiveDistroId(target.id)
+        }
+        // Launch the install on the IO dispatcher and return immediately.
+        // Callers poll via inspect_proot.osSetupState — matches the UI
+        // pattern of "tap Install, watch the progress block update".
+        backgroundScope.launch {
+            try {
+                pm.installRootfs()
+            } catch (_: Exception) {
+                // The catch in installRootfs already pushes Error state.
+            }
+        }
+        return JSONObject().apply {
+            put("distroId", target.id)
+            put("label", target.label)
+            put("alreadyInstalled", wasInstalled)
+            put("status", "started")
+            put("poll", "inspect_proot.osSetupState")
+        }
+    }
+
+    private suspend fun deleteDistroTool(args: JSONObject): JSONObject {
+        val distroId = args.optString("distroId").takeIf { it.isNotEmpty() }
+            ?: throw McpError(-32602, "distroId is required")
+        val target = sh.haven.core.local.proot.DistroCatalog.lookup(distroId)
+            ?: throw McpError(-32602, "Unknown distroId: $distroId")
+        val pm = prootManager
+        // Stop any DEs on this distro before yanking the rootfs.
+        if (pm.activeDistroId == target.id) {
+            localSessionManager.desktopManager.stopAll()
+        }
+        pm.deleteDistro(target.id)
+        // Drop install-log rows for this distro too — the rootfs is gone,
+        // its events would just be confusing on a re-install.
+        prootInstallLogRepository.deleteForDistro(target.id)
+        return JSONObject().apply {
+            put("distroId", target.id)
+            put("label", target.label)
+            put("status", "deleted")
+        }
+    }
+
+    private suspend fun installDesktopTool(args: JSONObject): JSONObject {
+        val deId = args.optString("deId").takeIf { it.isNotEmpty() }
+            ?: throw McpError(-32602, "deId is required")
+        val de = sh.haven.core.local.ProotManager.DesktopEnvironment.entries
+            .firstOrNull { it.spec.id == deId }
+            ?: throw McpError(-32602, "Unknown deId: $deId")
+        val vncPassword = args.optString("vncPassword", "")
+        val pm = prootManager
+        val active = pm.activeDistro
+        if (active.family !in de.spec.packagesPerFamily.keys) {
+            throw McpError(
+                -32602,
+                "${de.label} has no package list for ${active.family} — supported: " +
+                    "${de.spec.packagesPerFamily.keys}",
+            )
+        }
+        backgroundScope.launch {
+            try {
+                pm.setupDesktop(vncPassword, de)
+            } catch (_: Exception) {
+                // setupDesktop's catch already pushes Error state.
+            }
+        }
+        return JSONObject().apply {
+            put("deId", de.spec.id)
+            put("label", de.label)
+            put("activeDistroId", active.id)
+            put("compatibility", de.spec.compatibilityOn(active.family).name)
+            de.spec.compatibilityNoteOn(active.family)?.let { put("compatibilityNote", it) }
+            put("status", "started")
+            put("poll", "inspect_proot.desktopSetupState")
+        }
+    }
+
+    private suspend fun uninstallDesktopTool(args: JSONObject): JSONObject {
+        val deId = args.optString("deId").takeIf { it.isNotEmpty() }
+            ?: throw McpError(-32602, "deId is required")
+        val de = sh.haven.core.local.ProotManager.DesktopEnvironment.entries
+            .firstOrNull { it.spec.id == deId }
+            ?: throw McpError(-32602, "Unknown deId: $deId")
+        val pm = prootManager
+        localSessionManager.desktopManager.stopDesktop(de)
+        pm.uninstallDesktop(de)
+        return JSONObject().apply {
+            put("deId", de.spec.id)
+            put("label", de.label)
+            put("status", "uninstalled")
+        }
+    }
+
+    private suspend fun getProotInstallLog(args: JSONObject): JSONObject {
+        val distroId = args.optString("distroId").takeIf { it.isNotEmpty() }
+        val sinceMs = args.optLong("sinceMs", 0L)
+        val limit = args.optInt("limit", 100).coerceIn(1, 1000)
+        val events = prootInstallLogRepository.querySince(
+            distroId = distroId,
+            sinceMs = sinceMs,
+            limit = limit,
+        )
+        val arr = JSONArray().apply {
+            events.forEach { put(installLogEventToJson(it)) }
+        }
+        return JSONObject().apply {
+            put("count", events.size)
+            distroId?.let { put("distroId", it) }
+            put("sinceMs", sinceMs)
+            put("events", arr)
+        }
     }
 }
 

@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import sh.haven.core.data.repository.ProotInstallLogRepository
 import sh.haven.core.local.proot.Arch
 import sh.haven.core.local.proot.DesktopCatalog
 import sh.haven.core.local.proot.DesktopEnvironmentSpec
@@ -40,13 +41,47 @@ private const val PREF_ACTIVE_DISTRO_ID = "active_distro_id"
 @Singleton
 class ProotManager @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val installLogRepository: ProotInstallLogRepository,
 ) {
+    /**
+     * Which phase of the OS install pipeline the state belongs to.
+     * Used by [SetupState.Error] to attribute failures, so the UI
+     * can render a "Bootstrap hook: void-xbps-bootstrap" chip
+     * instead of an anonymous "Installation failed". The five
+     * phases correspond 1:1 to the steps in [installRootfs].
+     */
+    enum class Phase {
+        RootfsDownload,
+        RootfsExtract,
+        BootstrapHook,
+        Baseline,
+    }
+
     sealed class SetupState {
         data object NotInstalled : SetupState()
         data class Downloading(val progress: Int) : SetupState()
         data object Extracting : SetupState()
+        /**
+         * Post-extract setup — running distro post-extract hooks
+         * (locale-gen on Arch, ca-cert refresh on Void) and the
+         * baseline-package install (pacman -Sy / apt-get install
+         * tmux etc.). Distinct from [Extracting] so the UI doesn't
+         * mislabel the slow distro-prep phase as "extraction".
+         */
+        data class Initializing(val step: String) : SetupState()
         data object Ready : SetupState()
-        data class Error(val message: String) : SetupState()
+        /**
+         * Failure attributed to a specific [Phase]. [logTail] is the
+         * last ~1500 chars of the failing command's output — empty
+         * for failures that aren't shell-exec related (e.g. network
+         * error during download). The UI renders [phase] as a chip
+         * and [logTail] in a scroll box.
+         */
+        data class Error(
+            val phase: Phase,
+            val message: String,
+            val logTail: String = "",
+        ) : SetupState()
     }
 
     private val _state = MutableStateFlow<SetupState>(SetupState.NotInstalled)
@@ -313,11 +348,35 @@ class ProotManager @Inject constructor(
     val installedDesktop: DesktopEnvironment?
         get() = installedDesktops.firstOrNull()
 
+    /**
+     * Which phase of the DE install pipeline the state belongs to.
+     * Used by [DesktopSetupState.Error] to attribute failures so the
+     * UI can distinguish "package install failed" (mirror flake,
+     * xbps nested-chroot INSTALL script) from "VNC config failed"
+     * (xstartup write, vncpasswd) from "marker file failed".
+     */
+    enum class DePhase {
+        Packages,
+        VncConfig,
+        Marker,
+    }
+
     sealed class DesktopSetupState {
         data object Idle : DesktopSetupState()
         data class Installing(val step: String) : DesktopSetupState()
         data object Complete : DesktopSetupState()
-        data class Error(val message: String) : DesktopSetupState()
+        /**
+         * Failure attributed to a specific [DePhase]. [logTail] is
+         * the last ~1500 chars of the failing command's output. The
+         * UI renders [phase] as a chip and [logTail] in a scroll
+         * box, so the user/maintainer can see which layer failed
+         * without reading source.
+         */
+        data class Error(
+            val phase: DePhase,
+            val message: String,
+            val logTail: String = "",
+        ) : DesktopSetupState()
     }
 
     private val _desktopState = MutableStateFlow<DesktopSetupState>(DesktopSetupState.Idle)
@@ -386,10 +445,20 @@ class ProotManager @Inject constructor(
             return
         }
 
+        // Track which phase is active so the outer catch can attribute
+        // any thrown exception to the right step. Mutates as we move
+        // through download → extract → hooks → baseline.
+        var currentPhase: Phase = Phase.RootfsDownload
+        val installStartedAt = System.currentTimeMillis()
         try {
             _state.value = SetupState.Downloading(0)
 
             val distro = activeDistro
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "RootfsDownload",
+                message = "Starting download",
+            )
             val arch = Arch.current()
                 ?: throw IllegalStateException("Unsupported ABI: ${android.os.Build.SUPPORTED_ABIS.toList()}")
             val source = distro.rootfsSources[arch]
@@ -402,7 +471,7 @@ class ProotManager @Inject constructor(
 
             // Download
             withContext(Dispatchers.IO) {
-                Log.d(TAG, "Downloading rootfs: $url")
+                Log.d(TAG, "[download ${distro.id}] start url=$url")
                 val conn = URL(url).openConnection()
                 val totalSize = conn.contentLength
                 BufferedInputStream(conn.getInputStream()).use { input ->
@@ -421,7 +490,7 @@ class ProotManager @Inject constructor(
                         }
                     }
                 }
-                Log.d(TAG, "Download complete: ${tarball.length()} bytes")
+                Log.d(TAG, "[download ${distro.id}] done bytes=${tarball.length()}")
             }
 
             // Verify SHA-256 checksum
@@ -442,21 +511,36 @@ class ProotManager @Inject constructor(
                             "Download deleted. This may indicate a corrupted download or tampered file."
                     )
                 }
-                Log.d(TAG, "SHA-256 verified: $actualSha256")
+                Log.d(TAG, "[download ${distro.id}] sha256-ok $actualSha256")
             }
 
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "RootfsDownload",
+                exit = 0,
+                ok = true,
+                message = "Download + sha256 OK (${tarball.length()} bytes)",
+            )
+
             // Extract
+            currentPhase = Phase.RootfsExtract
             _state.value = SetupState.Extracting
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "RootfsExtract",
+                message = "Starting extract",
+            )
             val targetDir = File(context.filesDir, "proot/rootfs/${distro.id}")
             withContext(Dispatchers.IO) {
+                Log.d(TAG, "[extract ${distro.id}] start")
                 extractTarball(tarball, targetDir, source)
                 tarball.delete()
-                Log.d(TAG, "Rootfs extracted to ${targetDir.absolutePath}")
+                Log.d(TAG, "[extract ${distro.id}] done dir=${targetDir.absolutePath}")
 
                 // Android doesn't have /etc/resolv.conf — write one with public DNS
                 val resolvConf = File(targetDir, "etc/resolv.conf")
                 resolvConf.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
-                Log.d(TAG, "Wrote resolv.conf")
+                Log.d(TAG, "[extract ${distro.id}] wrote resolv.conf")
 
                 // Drop a generic shell profile and a welcome README into
                 // /root/. These are vendor-neutral — they explain what the
@@ -468,19 +552,63 @@ class ProotManager @Inject constructor(
             }
 
             // Run distro-specific post-extract hooks before baseline:
-            // pacman-key --init, xbps-install -S, etc. Phase 2 (Alpine,
-            // Debian) ships with empty hook lists — the infrastructure
-            // is wired ahead of Phase 3 (Arch, Void) needing it.
+            // locale-gen on Arch, ca-cert refresh on Void, etc. The
+            // state.value advance to Initializing so the UI doesn't
+            // keep saying "Extracting rootfs…" through a multi-minute
+            // setup phase that has nothing to do with extraction.
+            //
+            // Hooks are now HARD-FAIL: a non-zero exit aborts the
+            // install with Phase.BootstrapHook attribution. Previous
+            // behaviour was silent-continue, which hid Void's three-
+            // step xbps bootstrap fragility until a much later DE
+            // install failed with a downstream symptom. The user
+            // sees the hook id (e.g. "void-xbps-bootstrap") in the
+            // error chip and the log tail of the failing script.
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "RootfsExtract",
+                exit = 0,
+                ok = true,
+                message = "Extracted to ${targetDir.absolutePath}",
+            )
+
+            currentPhase = Phase.BootstrapHook
             for (hook in distro.postExtractHooks) {
-                try {
-                    val (output, code) = runCommandInProot(hook.command)
-                    if (code == 0) {
-                        Log.d(TAG, "postExtractHook ${hook.id} ok")
-                    } else {
-                        Log.w(TAG, "postExtractHook ${hook.id} exit=$code tail=${output.takeLast(200)}")
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "postExtractHook ${hook.id} failed (non-fatal): ${e.message}")
+                _state.value = SetupState.Initializing(hook.id)
+                Log.d(TAG, "[hook ${hook.id}] start")
+                installLogRepository.logEvent(
+                    distroId = distro.id,
+                    phase = "BootstrapHook:${hook.id}",
+                    message = "Starting hook",
+                )
+                val (output, code) = runCommandInProot(hook.command)
+                if (code == 0) {
+                    Log.d(TAG, "[hook ${hook.id}] ok bytes=${output.length}")
+                    installLogRepository.logEvent(
+                        distroId = distro.id,
+                        phase = "BootstrapHook:${hook.id}",
+                        exit = 0,
+                        ok = true,
+                    )
+                } else {
+                    Log.w(TAG, "[hook ${hook.id}] exit=$code tail=${output.takeLast(1500)}")
+                    installLogRepository.logEvent(
+                        distroId = distro.id,
+                        phase = "BootstrapHook:${hook.id}",
+                        exit = code,
+                        ok = false,
+                        message = "Hook failed (exit $code)",
+                        logTail = output.takeLast(1500),
+                    )
+                    _state.value = SetupState.Error(
+                        phase = Phase.BootstrapHook,
+                        message = "Bootstrap hook '${hook.id}' failed (exit $code). " +
+                            "This is usually a transient network issue (mirror down, " +
+                            "stale package DB) — tap Retry. If it persists, the distro " +
+                            "tarball may need a rebuild.",
+                        logTail = output.takeLast(1500),
+                    )
+                    return
                 }
             }
 
@@ -491,12 +619,36 @@ class ProotManager @Inject constructor(
             // composition pattern documented in /root/README.md). Best-
             // effort — if network is unavailable the rootfs is still fully
             // usable with busybox and the user can run `apk add` later.
+            currentPhase = Phase.Baseline
+            _state.value = SetupState.Initializing("baseline packages")
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "Baseline",
+                message = "Installing baseline packages: ${distro.baselinePackages.joinToString(" ")}",
+            )
             installBaseline()
 
             _state.value = SetupState.Ready
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "Ready",
+                exit = 0,
+                ok = true,
+                message = "Rootfs install complete (${System.currentTimeMillis() - installStartedAt}ms total)",
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "Rootfs install failed", e)
-            _state.value = SetupState.Error(e.message ?: "Installation failed")
+            Log.e(TAG, "[install ${currentPhase}] failed", e)
+            installLogRepository.logEvent(
+                distroId = activeDistro.id,
+                phase = currentPhase.name,
+                ok = false,
+                message = e.message ?: "Installation failed",
+            )
+            _state.value = SetupState.Error(
+                phase = currentPhase,
+                message = e.message ?: "Installation failed",
+                logTail = "",
+            )
         }
     }
 
@@ -797,20 +949,44 @@ class ProotManager @Inject constructor(
      * tmux is ~250KB, so the cost of bundling it is negligible.
      */
     private suspend fun installBaseline() {
+        val distro = activeDistro
         try {
-            val distro = activeDistro
             val ops = PackageOps.forFamily(distro.family)
             val install = ops.installCmd(distro.baselinePackages)
+            // Don't pre-truncate with `| tail -N` — that hides the
+            // actual error line on a failed install. Kotlin-side
+            // takeLast() keeps the log size bounded.
             val (output, code) = runCommandInProot(
-                "${ops.updateCmd()} >/dev/null 2>&1 && $install 2>&1 | tail -5",
+                "${ops.updateCmd()} >/dev/null 2>&1 && $install 2>&1",
             )
             if (code == 0) {
-                Log.d(TAG, "Baseline packages installed")
+                Log.d(TAG, "[baseline ${distro.id}] ok pkgs=${distro.baselinePackages.size}")
+                installLogRepository.logEvent(
+                    distroId = distro.id,
+                    phase = "Baseline",
+                    exit = 0,
+                    ok = true,
+                    message = "Installed ${distro.baselinePackages.size} packages",
+                )
             } else {
-                Log.w(TAG, "Baseline install exit=$code tail=${output.takeLast(200)}")
+                Log.w(TAG, "[baseline ${distro.id}] exit=$code tail=${output.takeLast(1500)}")
+                installLogRepository.logEvent(
+                    distroId = distro.id,
+                    phase = "Baseline",
+                    exit = code,
+                    ok = false,
+                    message = "Baseline install failed (exit $code) — non-fatal, rootfs is usable",
+                    logTail = output.takeLast(1500),
+                )
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Baseline install failed (non-fatal): ${e.message}")
+            Log.w(TAG, "[baseline ${distro.id}] threw (non-fatal): ${e.message}")
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "Baseline",
+                ok = false,
+                message = "Baseline install threw: ${e.message}",
+            )
         }
     }
 
@@ -846,15 +1022,50 @@ class ProotManager @Inject constructor(
     }
 
     /**
+     * Run `update && install` inside the proot, and if the install
+     * fails with the family's stale-package-DB signature, run a
+     * full system upgrade once and retry the install. Self-repair
+     * for the long-tail case where the rootfs tarball is from a
+     * snapshot whose package names / dependency chains have moved
+     * on in the live repos (e.g. Arch renamed libstdc++ → gcc-libs
+     * weeks after the proot-distro tarball was built; subsequent
+     * `pacman -S xfce4` fails until `pacman -Syu` realigns
+     * everything).
+     */
+    private suspend fun runInstallWithSelfRepair(
+        ops: PackageOps,
+        pkgs: List<String>,
+    ): Pair<String, Int> {
+        val installCmd = "${ops.updateCmd()} && ${ops.installCmd(pkgs)}"
+        val (output, code) = runCommandInProot(installCmd)
+        if (code == 0 || !ops.looksLikeStaleDb(output)) {
+            return Pair(output, code)
+        }
+        Log.d(TAG, "Install hit stale-DB symptom; auto-upgrading and retrying")
+        _desktopState.value = DesktopSetupState.Installing(
+            "Refreshing package database (one-time upgrade)…",
+        )
+        val (upgOut, upgCode) = runCommandInProot(ops.upgradeCmd())
+        Log.d(TAG, "Auto-upgrade exit=$upgCode tail=${upgOut.takeLast(300)}")
+        return runCommandInProot(installCmd)
+    }
+
+    /**
      * Install X11 + VNC + Xfce4 desktop inside the PRoot rootfs.
      */
     suspend fun setupDesktop(vncPassword: String, de: DesktopEnvironment = DesktopEnvironment.XFCE4) {
         try {
-            // Ensure rootfs is installed first
+            // Ensure rootfs is installed first. If it failed, the
+            // root cause already lives in _state as SetupState.Error
+            // with a Phase. Don't shadow it with a vague DE-level
+            // error — keep the OS-layer attribution visible so the
+            // user sees "Bootstrap hook void-xbps-bootstrap failed"
+            // rather than the misleading "Rootfs install failed"
+            // under a Desktop installation banner.
             if (!isRootfsInstalled) {
                 installRootfs()
                 if (_state.value is SetupState.Error) {
-                    _desktopState.value = DesktopSetupState.Error("Rootfs install failed")
+                    _desktopState.value = DesktopSetupState.Idle
                     return
                 }
             }
@@ -870,10 +1081,14 @@ class ProotManager @Inject constructor(
             val ops = PackageOps.forFamily(distro.family)
             val pkgs = de.spec.packagesPerFamily[distro.family]
                 ?: error("${de.spec.id} has no package list for ${distro.family} — supported: ${de.spec.packagesPerFamily.keys}")
-            val (installOutput, installExit) = runCommandInProot(
-                "${ops.updateCmd()} && ${ops.installCmd(pkgs)}"
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "DePackage:${de.spec.id}",
+                deId = de.spec.id,
+                message = "Installing ${de.label}: ${pkgs.joinToString(" ")}",
             )
-            Log.d(TAG, "${distro.family} install exit=$installExit output(last 300)=${installOutput.takeLast(300)}")
+            val (installOutput, installExit) = runInstallWithSelfRepair(ops, pkgs)
+            Log.d(TAG, "[de-package ${de.spec.id}] family=${distro.family} exit=$installExit tail=${installOutput.takeLast(1500)}")
 
             // Check if key binaries were installed — package managers may
             // return non-zero for non-fatal trigger errors (gtk icon cache,
@@ -885,11 +1100,44 @@ class ProotManager @Inject constructor(
                 File(activeRootfsDir, de.verifyBinary).exists()
             }
             if (!checkInstalled) {
+                // If the failure looks like a transient mirror sync
+                // issue, surface a clearer "try again later" message
+                // rather than dumping raw apt/pacman tail at the
+                // user. Self-repair will have already retried once
+                // with a forced DB refresh, so a remaining failure
+                // means the mirror is genuinely out of sync — usually
+                // resolves itself within minutes.
+                val message = if (ops.looksLikeStaleDb(installOutput)) {
+                    "Distro mirror is mid-sync (a package version listed in the " +
+                        "index isn't on disk yet). Wait a few minutes and tap " +
+                        "Install again — usually self-resolves."
+                } else {
+                    "Package install failed for ${de.label} on ${distro.label}."
+                }
+                installLogRepository.logEvent(
+                    distroId = distro.id,
+                    phase = "DePackage:${de.spec.id}",
+                    deId = de.spec.id,
+                    exit = installExit,
+                    ok = false,
+                    message = message,
+                    logTail = installOutput.takeLast(1500),
+                )
                 _desktopState.value = DesktopSetupState.Error(
-                    "Package install failed: ${installOutput.takeLast(300)}"
+                    phase = DePhase.Packages,
+                    message = message,
+                    logTail = installOutput.takeLast(1500),
                 )
                 return
             }
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "DePackage:${de.spec.id}",
+                deId = de.spec.id,
+                exit = installExit,
+                ok = true,
+                message = "Packages installed",
+            )
 
             // Update marker — append this DE to the installed set
             File(activeRootfsDir, "root").mkdirs()
@@ -939,11 +1187,30 @@ XEOF
 chmod +x /root/.vnc/xstartup""")
             }
 
-            Log.d(TAG, "Desktop setup complete")
+            Log.d(TAG, "[de-config ${de.spec.id}] complete")
+            installLogRepository.logEvent(
+                distroId = activeDistro.id,
+                phase = "DeConfig:${de.spec.id}",
+                deId = de.spec.id,
+                exit = 0,
+                ok = true,
+                message = "${de.label} setup complete",
+            )
             _desktopState.value = DesktopSetupState.Complete
         } catch (e: Exception) {
-            Log.e(TAG, "Desktop setup failed", e)
-            _desktopState.value = DesktopSetupState.Error(e.message ?: "Setup failed")
+            Log.e(TAG, "[de-setup ${de.spec.id}] failed", e)
+            installLogRepository.logEvent(
+                distroId = activeDistro.id,
+                phase = "DeConfig:${de.spec.id}",
+                deId = de.spec.id,
+                ok = false,
+                message = e.message ?: "Setup failed",
+            )
+            _desktopState.value = DesktopSetupState.Error(
+                phase = DePhase.VncConfig,
+                message = e.message ?: "Setup failed",
+                logTail = "",
+            )
         }
     }
 
@@ -963,9 +1230,7 @@ chmod +x /root/.vnc/xstartup""")
 
             val ops = PackageOps.forFamily(activeDistro.family)
             val packages = addons.flatMap { it.packages.split(" ").filter { p -> p.isNotBlank() } }
-            val (installOutput, installExit) = runCommandInProot(
-                "${ops.updateCmd()} && ${ops.installCmd(packages)}"
-            )
+            val (installOutput, installExit) = runInstallWithSelfRepair(ops, packages)
             Log.d(TAG, "addon install exit=$installExit output(last 300)=${installOutput.takeLast(300)}")
 
             writeDesktopConfigs()
@@ -977,8 +1242,12 @@ chmod +x /root/.vnc/xstartup""")
 
             _desktopState.value = DesktopSetupState.Complete
         } catch (e: Exception) {
-            Log.e(TAG, "Addon install failed", e)
-            _desktopState.value = DesktopSetupState.Error(e.message ?: "Addon install failed")
+            Log.e(TAG, "[addon-install] failed", e)
+            _desktopState.value = DesktopSetupState.Error(
+                phase = DePhase.Packages,
+                message = e.message ?: "Addon install failed",
+                logTail = "",
+            )
         }
     }
 
@@ -1010,8 +1279,12 @@ chmod +x /root/.vnc/xstartup""")
             Log.d(TAG, "${de.label} uninstalled, remaining: ${remaining.map { it.name }}")
             _desktopState.value = DesktopSetupState.Complete
         } catch (e: Exception) {
-            Log.e(TAG, "Desktop uninstall failed", e)
-            _desktopState.value = DesktopSetupState.Error(e.message ?: "Uninstall failed")
+            Log.e(TAG, "[de-uninstall ${de.spec.id}] failed", e)
+            _desktopState.value = DesktopSetupState.Error(
+                phase = DePhase.Packages,
+                message = e.message ?: "Uninstall failed",
+                logTail = "",
+            )
         }
     }
 
@@ -1261,5 +1534,28 @@ chmod +x /root/.vnc/xstartup""")
             File(context.filesDir, "proot/rootfs/alpine").deleteRecursively()
         }
         _state.value = SetupState.NotInstalled
+    }
+
+    /**
+     * Delete a specific distro's rootfs by id. If the deleted distro
+     * was active, switches active to the first remaining installed
+     * distro (or DEFAULT_ID if none remain) and re-evaluates ready
+     * state. Used by the distro picker's per-row delete button —
+     * the recovery path for a broken-state install.
+     */
+    fun deleteDistro(distroId: String) {
+        val dir = rootfsDirFor(distroId)
+        dir.deleteRecursively()
+        // Belt-and-braces: nuke the legacy alpine/ path if we were
+        // asked to delete the default distro and it still exists
+        // there too (one-off migration edge case).
+        if (distroId == DistroCatalog.DEFAULT_ID) {
+            File(context.filesDir, "proot/rootfs/alpine").deleteRecursively()
+        }
+        if (activeDistroId == distroId) {
+            reconcileActiveDistro()
+        }
+        _state.value = if (isReady) SetupState.Ready else SetupState.NotInstalled
+        Log.d(TAG, "Deleted distro: $distroId")
     }
 }
