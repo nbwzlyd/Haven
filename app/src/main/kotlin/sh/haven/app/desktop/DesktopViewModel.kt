@@ -140,8 +140,20 @@ class DesktopViewModel @Inject constructor(
         vncPassword: String,
         de: ProotManager.DesktopEnvironment = ProotManager.DesktopEnvironment.XFCE4,
         addons: Set<ProotManager.DesktopAddon> = emptySet(),
+        vncPort: Int? = null,
     ) {
         viewModelScope.launch {
+            // Capture the port preference BEFORE the install kicks off
+            // so the eventual startDesktop reads it on its first launch.
+            // Port 0 from the dialog (e.g. user cleared the field) means
+            // "keep auto"; we only persist non-zero overrides.
+            if (vncPort != null && vncPort in 5901..5999) {
+                desktopManager.setPortPreference(
+                    distroId = prootManager.activeDistroId,
+                    deId = de.spec.id,
+                    port = vncPort,
+                )
+            }
             prootManager.setupDesktop(vncPassword, de)
             if (addons.isNotEmpty() &&
                 prootManager.desktopState.value is ProotManager.DesktopSetupState.Complete
@@ -149,6 +161,25 @@ class DesktopViewModel @Inject constructor(
                 prootManager.installAddons(addons)
             }
         }
+    }
+
+    /**
+     * Suggested default VNC port for a fresh install on the active
+     * distro. Picks the lowest 5900+N not already pinned by another
+     * installed DE or in use by a running session. UI reads this once
+     * when the install dialog opens and stuffs it into the editable
+     * field; subsequent typed edits replace it.
+     */
+    fun suggestVncPortFor(de: ProotManager.DesktopEnvironment): Int {
+        val existing = desktopManager.getPortPreference(prootManager.activeDistroId, de.spec.id)
+        if (existing in 5901..5999) return existing
+        return desktopManager.suggestNextVncPort(prootManager.activeDistroId)
+    }
+
+    /** The stored port preference for [de], or null if auto-assign applies. */
+    fun storedVncPortFor(de: ProotManager.DesktopEnvironment): Int? {
+        val p = desktopManager.getPortPreference(prootManager.activeDistroId, de.spec.id)
+        return if (p in 5901..5999) p else null
     }
 
     fun uninstallDesktop(de: ProotManager.DesktopEnvironment) {

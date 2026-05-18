@@ -87,11 +87,11 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
     val rootfsSetupState by viewModel.rootfsSetupState.collectAsState()
     val installedDistros = viewModel.installedDistros
     val availableDistros = viewModel.availableDistros
+    val isRootfsReady = rootfsSetupState is ProotManager.SetupState.Ready
 
     var setupDesktopDe by remember {
         mutableStateOf<ProotManager.DesktopEnvironment?>(null)
     }
-    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -106,6 +106,8 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             installedDistros = installedDistros,
             availableDistros = availableDistros,
             rootfsSetupState = rootfsSetupState,
+            isRootfsReady = isRootfsReady,
+            storedVncPortFor = { viewModel.storedVncPortFor(it) },
             onSwitchDistro = { viewModel.switchActiveDistro(it) },
             onAddDistro = { viewModel.addDistro(it) },
             onDeleteDistro = { viewModel.deleteDistro(it.id) },
@@ -117,8 +119,6 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
     }
 
     setupDesktopDe?.let { de ->
-        // Auto-dismiss dialog when setup completes — matches the
-        // behaviour the Connections-side dialog had pre-3c.
         androidx.compose.runtime.LaunchedEffect(desktopSetupState) {
             if (desktopSetupState is ProotManager.DesktopSetupState.Complete) {
                 setupDesktopDe = null
@@ -126,12 +126,14 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             }
         }
         val activeFamily = DistroCatalog.lookup(activeDistroId)?.family
+        val suggestedPort = remember(de, activeDistroId) { viewModel.suggestVncPortFor(de) }
         DesktopSetupDialog(
             desktopState = desktopSetupState,
             selectedDe = de,
             activeFamily = activeFamily,
-            onStart = { password, _, addons ->
-                viewModel.setupDesktop(password, de, addons)
+            suggestedVncPort = suggestedPort,
+            onStart = { password, _, addons, vncPort ->
+                viewModel.setupDesktop(password, de, addons, vncPort)
             },
             onDismiss = {
                 setupDesktopDe = null
@@ -150,6 +152,8 @@ private fun DesktopManagerSection(
     installedDistros: List<Distro>,
     availableDistros: List<Distro>,
     rootfsSetupState: ProotManager.SetupState,
+    isRootfsReady: Boolean,
+    storedVncPortFor: (ProotManager.DesktopEnvironment) -> Int?,
     onSwitchDistro: (String) -> Unit,
     onAddDistro: (Distro) -> Unit,
     onDeleteDistro: (Distro) -> Unit,
@@ -329,6 +333,8 @@ private fun DesktopManagerSection(
                     instance = instance,
                     isSetupBusy = desktopSetupState is ProotManager.DesktopSetupState.Installing,
                     activeFamily = activeDistro?.family,
+                    isRootfsReady = isRootfsReady,
+                    storedVncPort = storedVncPortFor(de),
                     onInstall = { onInstall(de) },
                     onStart = { onStart(de) },
                     onStop = { onStop(de) },
@@ -346,6 +352,8 @@ private fun DesktopRow(
     instance: DesktopManager.DesktopInstance?,
     isSetupBusy: Boolean = false,
     activeFamily: PackageFamily? = null,
+    isRootfsReady: Boolean = true,
+    storedVncPort: Int? = null,
     onInstall: () -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
@@ -425,7 +433,15 @@ private fun DesktopRow(
                     )
                 !isInstalled ->
                     Text(
-                        de.sizeEstimate,
+                        de.sizeEstimate +
+                            if (!isRootfsReady) " · install distro first" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                isInstalled && instance?.state != DesktopManager.DesktopState.RUNNING &&
+                    instance?.state != DesktopManager.DesktopState.STARTING && storedVncPort != null && !de.isNative ->
+                    Text(
+                        "VNC port $storedVncPort",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -433,7 +449,12 @@ private fun DesktopRow(
         }
 
         if (!isInstalled) {
-            TextButton(onClick = onInstall, enabled = !isSetupBusy) {
+            // Disabled until rootfs reaches Ready — the install path
+            // calls into ProotManager.setupDesktop which silently
+            // installs the rootfs if missing; we'd rather make the
+            // dependency obvious. The subtitle above carries the
+            // "install distro first" hint.
+            TextButton(onClick = onInstall, enabled = !isSetupBusy && isRootfsReady) {
                 Text(stringResource(R.string.common_install))
             }
         } else if (isSetupBusy) {
@@ -470,7 +491,13 @@ private fun DesktopSetupDialog(
     desktopState: ProotManager.DesktopSetupState,
     selectedDe: ProotManager.DesktopEnvironment,
     activeFamily: PackageFamily? = null,
-    onStart: (password: String, de: ProotManager.DesktopEnvironment, addons: Set<ProotManager.DesktopAddon>) -> Unit,
+    suggestedVncPort: Int = 5901,
+    onStart: (
+        password: String,
+        de: ProotManager.DesktopEnvironment,
+        addons: Set<ProotManager.DesktopAddon>,
+        vncPort: Int?,
+    ) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val compatibility = activeFamily?.let { selectedDe.spec.compatibilityOn(it) }
@@ -478,6 +505,11 @@ private fun DesktopSetupDialog(
     val compatibilityNote = activeFamily?.let { selectedDe.spec.compatibilityNoteOn(it) }
     var password by rememberSaveable { mutableStateOf("haven") }
     var shellCmd by rememberSaveable { mutableStateOf("/bin/sh") }
+    var portText by rememberSaveable(selectedDe, suggestedVncPort) {
+        mutableStateOf(suggestedVncPort.toString())
+    }
+    val portInt = portText.toIntOrNull()
+    val portValid = portInt != null && portInt in 5901..5999
     var selectedAddons by remember {
         mutableStateOf(emptySet<ProotManager.DesktopAddon>())
     }
@@ -528,6 +560,28 @@ private fun DesktopSetupDialog(
                                 value = password,
                                 onValueChange = { password = it },
                                 label = { Text(stringResource(R.string.connections_desktop_vnc_password)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            // Per-DE VNC port. Defaults to the next free
+                            // 5900+N for the active distro; the user can
+                            // override (e.g. to match an SSH tunnel they
+                            // already have set up, or to dodge a port
+                            // that's in use elsewhere on the network).
+                            // Range 5901-5999 is enforced; outside that
+                            // we keep the field editable but disable
+                            // Install via portValid.
+                            OutlinedTextField(
+                                value = portText,
+                                onValueChange = { portText = it.filter { c -> c.isDigit() }.take(4) },
+                                label = { Text("VNC port") },
+                                supportingText = {
+                                    Text(
+                                        if (portValid) "Display :${(portInt!! - 5900)}"
+                                        else "Range 5901–5999",
+                                    )
+                                },
+                                isError = !portValid,
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -646,10 +700,13 @@ private fun DesktopSetupDialog(
         },
         confirmButton = {
             if (desktopState is ProotManager.DesktopSetupState.Idle) {
+                // Wayland DEs don't surface a VNC port (no Xvnc), so
+                // the dialog skips the port field and we pass null —
+                // setupDesktop handles null as "no preference".
+                val portArg = if (selectedDe.isWayland) null else portInt
                 TextButton(
-                    onClick = {
-                        onStart(password, selectedDe, selectedAddons)
-                    },
+                    onClick = { onStart(password, selectedDe, selectedAddons, portArg) },
+                    enabled = selectedDe.isWayland || portValid,
                 ) { Text(stringResource(R.string.common_install)) }
             }
         },

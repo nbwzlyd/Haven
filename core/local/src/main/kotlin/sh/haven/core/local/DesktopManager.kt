@@ -47,6 +47,15 @@ class DesktopManager @Inject constructor(
     // Display number allocation for X11 desktops
     private val usedDisplays = mutableSetOf<Int>()
 
+    // Per-(distro, DE) VNC port preference. Empty when the user accepted
+    // the default at install time; non-zero when the install dialog's
+    // port field was edited. Reads/writes go through getPortPreference /
+    // setPortPreference so the SharedPreferences instance is consulted
+    // once per startDesktop rather than once per accessor.
+    private val portPrefs by lazy {
+        context.getSharedPreferences("desktop-port-prefs", Context.MODE_PRIVATE)
+    }
+
     init {
         // Kill orphaned Xvnc processes from previous app instances
         killAllOrphanedXvnc()
@@ -61,6 +70,39 @@ class DesktopManager @Inject constructor(
 
     private fun releaseDisplay(display: Int) {
         usedDisplays.remove(display)
+    }
+
+    /**
+     * Per-(distro, DE) port preference. Returns 0 when no preference is
+     * stored — caller falls back to [allocateDisplay] + 5900. Stored
+     * keys are `<distroId>_<deId>` so the same DE on different distros
+     * (Alpine xfce4 vs Debian xfce4) keeps independent ports.
+     */
+    fun getPortPreference(distroId: String, deId: String): Int {
+        return portPrefs.getInt("${distroId}_${deId}", 0)
+    }
+
+    fun setPortPreference(distroId: String, deId: String, port: Int) {
+        portPrefs.edit().putInt("${distroId}_${deId}", port).apply()
+    }
+
+    /**
+     * Suggest the next free VNC port for a new install on [distroId].
+     * Considers ports currently in use by running DEs and ports already
+     * pinned by other installed DEs' preferences. Returns the first
+     * unused 5900+N. Defaults to 5901 when nothing is in play.
+     */
+    fun suggestNextVncPort(distroId: String): Int {
+        val takenByRunning = _desktops.value.values.map { it.vncPort }.toSet()
+        val takenByPrefs = portPrefs.all.entries
+            .asSequence()
+            .filter { it.key.startsWith("${distroId}_") }
+            .mapNotNull { (it.value as? Int)?.takeIf { v -> v > 0 } }
+            .toSet()
+        val taken = takenByRunning + takenByPrefs
+        var port = 5901
+        while (port in taken) port++
+        return port
     }
 
     /**
@@ -102,8 +144,31 @@ class DesktopManager @Inject constructor(
             }
         }
 
-        val display = allocateDisplay()
-        val port = 5900 + display
+        // Honour the user's per-DE port preference (set at install time
+        // in the Manage view) when present. The preference is stored as
+        // an absolute port (5900-base); display = port - 5900 maps it
+        // back into the X11 display-number space the Xvnc command line
+        // expects. Falls back to allocateDisplay when unset OR when the
+        // preferred display is already in use (multiple DEs pinned to
+        // the same port — Manage view should prevent this but defend).
+        val preferredPort = getPortPreference(prootManager.activeDistroId, de.spec.id)
+        val display: Int
+        val port: Int
+        if (preferredPort in 5901..5999) {
+            val candidateDisplay = preferredPort - 5900
+            if (candidateDisplay !in usedDisplays) {
+                display = candidateDisplay
+                port = preferredPort
+                usedDisplays.add(display)
+            } else {
+                Log.w(TAG, "preferred port $preferredPort for ${de.spec.id} already in use; falling back")
+                display = allocateDisplay()
+                port = 5900 + display
+            }
+        } else {
+            display = allocateDisplay()
+            port = 5900 + display
+        }
         _desktops.update { it + (de to DesktopInstance(de, display, port, DesktopState.STARTING)) }
 
         try {
