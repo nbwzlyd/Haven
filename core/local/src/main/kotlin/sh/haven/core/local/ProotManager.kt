@@ -572,70 +572,13 @@ class ProotManager @Inject constructor(
                 message = "Extracted to ${targetDir.absolutePath}",
             )
 
-            currentPhase = Phase.BootstrapHook
-            for (hook in distro.postExtractHooks) {
-                _state.value = SetupState.Initializing(hook.id)
-                Log.d(TAG, "[hook ${hook.id}] start")
-                installLogRepository.logEvent(
-                    distroId = distro.id,
-                    phase = "BootstrapHook:${hook.id}",
-                    message = "Starting hook",
-                )
-                val (output, code) = runCommandInProot(hook.command)
-                if (code == 0) {
-                    Log.d(TAG, "[hook ${hook.id}] ok bytes=${output.length}")
-                    installLogRepository.logEvent(
-                        distroId = distro.id,
-                        phase = "BootstrapHook:${hook.id}",
-                        exit = 0,
-                        ok = true,
-                    )
-                } else {
-                    Log.w(TAG, "[hook ${hook.id}] exit=$code tail=${output.takeLast(1500)}")
-                    installLogRepository.logEvent(
-                        distroId = distro.id,
-                        phase = "BootstrapHook:${hook.id}",
-                        exit = code,
-                        ok = false,
-                        message = "Hook failed (exit $code)",
-                        logTail = output.takeLast(1500),
-                    )
-                    _state.value = SetupState.Error(
-                        phase = Phase.BootstrapHook,
-                        message = "Bootstrap hook '${hook.id}' failed (exit $code). " +
-                            "This is usually a transient network issue (mirror down, " +
-                            "stale package DB) — tap Retry. If it persists, the distro " +
-                            "tarball may need a rebuild.",
-                        logTail = output.takeLast(1500),
-                    )
-                    return
-                }
-            }
-
-            // Install a minimal baseline of packages so the environment is
-            // immediately usable: bash (readline + .inputrc), curl +
-            // ca-certificates (for the user to follow install instructions
-            // over HTTPS), and openssh-client (for the remote-compute
-            // composition pattern documented in /root/README.md). Best-
-            // effort — if network is unavailable the rootfs is still fully
-            // usable with busybox and the user can run `apk add` later.
-            currentPhase = Phase.Baseline
-            _state.value = SetupState.Initializing("baseline packages")
-            installLogRepository.logEvent(
-                distroId = distro.id,
-                phase = "Baseline",
-                message = "Installing baseline packages: ${distro.baselinePackages.joinToString(" ")}",
-            )
-            installBaseline()
-
-            _state.value = SetupState.Ready
-            installLogRepository.logEvent(
-                distroId = distro.id,
-                phase = "Ready",
-                exit = 0,
-                ok = true,
-                message = "Rootfs install complete (${System.currentTimeMillis() - installStartedAt}ms total)",
-            )
+            // Post-extract setup (hooks + baseline) — factored out so
+            // `retry()` can re-run just these phases when the user
+            // hits Retry on a BootstrapHook or Baseline error chip.
+            // Hooks are required to be idempotent (RootfsHook.idempotent
+            // defaults to true; documented contract). On hook failure,
+            // SetupState.Error is set and we return early.
+            if (!runPostExtractSetup(distro, installStartedAt)) return
         } catch (e: Exception) {
             Log.e(TAG, "[install ${currentPhase}] failed", e)
             installLogRepository.logEvent(
@@ -649,6 +592,125 @@ class ProotManager @Inject constructor(
                 message = e.message ?: "Installation failed",
                 logTail = "",
             )
+        }
+    }
+
+    /**
+     * Run all post-extract bootstrap hooks, then the baseline package
+     * install. Sets [_state] to [SetupState.Ready] on success, or
+     * [SetupState.Error] on hook failure. Returns true if everything
+     * succeeded, false if any hook failed (caller in [installRootfs]
+     * uses this to return early so the outer catch doesn't fire).
+     *
+     * Idempotent contract: every hook is required to be safe to re-
+     * run, so [retry] can call this method again after a failure
+     * without wiping the rootfs. Hooks that aren't idempotent should
+     * set [sh.haven.core.local.proot.RootfsHook.idempotent] = false
+     * and the UI's retry path will offer Wipe & retry instead.
+     */
+    private suspend fun runPostExtractSetup(distro: Distro, installStartedAt: Long): Boolean {
+        for (hook in distro.postExtractHooks) {
+            _state.value = SetupState.Initializing(hook.id)
+            Log.d(TAG, "[hook ${hook.id}] start")
+            installLogRepository.logEvent(
+                distroId = distro.id,
+                phase = "BootstrapHook:${hook.id}",
+                message = "Starting hook",
+            )
+            val (output, code) = runCommandInProot(hook.command)
+            if (code == 0) {
+                Log.d(TAG, "[hook ${hook.id}] ok bytes=${output.length}")
+                installLogRepository.logEvent(
+                    distroId = distro.id,
+                    phase = "BootstrapHook:${hook.id}",
+                    exit = 0,
+                    ok = true,
+                )
+            } else {
+                Log.w(TAG, "[hook ${hook.id}] exit=$code tail=${output.takeLast(1500)}")
+                installLogRepository.logEvent(
+                    distroId = distro.id,
+                    phase = "BootstrapHook:${hook.id}",
+                    exit = code,
+                    ok = false,
+                    message = "Hook failed (exit $code)",
+                    logTail = output.takeLast(1500),
+                )
+                _state.value = SetupState.Error(
+                    phase = Phase.BootstrapHook,
+                    message = "Bootstrap hook '${hook.id}' failed (exit $code). " +
+                        "This is usually a transient network issue (mirror down, " +
+                        "stale package DB) — tap Retry. If it persists, the distro " +
+                        "tarball may need a rebuild.",
+                    logTail = output.takeLast(1500),
+                )
+                return false
+            }
+        }
+
+        // Install a minimal baseline of packages so the environment is
+        // immediately usable: bash (readline + .inputrc), curl +
+        // ca-certificates (for the user to follow install instructions
+        // over HTTPS), and openssh-client (for the remote-compute
+        // composition pattern documented in /root/README.md). Best-
+        // effort — if network is unavailable the rootfs is still fully
+        // usable with busybox and the user can run `apk add` later.
+        _state.value = SetupState.Initializing("baseline packages")
+        installLogRepository.logEvent(
+            distroId = distro.id,
+            phase = "Baseline",
+            message = "Installing baseline packages: ${distro.baselinePackages.joinToString(" ")}",
+        )
+        installBaseline()
+
+        _state.value = SetupState.Ready
+        installLogRepository.logEvent(
+            distroId = distro.id,
+            phase = "Ready",
+            exit = 0,
+            ok = true,
+            message = "Rootfs install complete (${System.currentTimeMillis() - installStartedAt}ms total)",
+        )
+        return true
+    }
+
+    /**
+     * Retry the failed phase of the most recent install attempt.
+     *
+     * Behaviour by phase:
+     *  - [Phase.RootfsDownload], [Phase.RootfsExtract] — wipes the
+     *    partial rootfs (the extract may have left a half-state) then
+     *    re-runs the full install. Network-side retries can land in
+     *    either bucket; in both cases the safest move is to start over
+     *    from the tarball.
+     *  - [Phase.BootstrapHook], [Phase.Baseline] — the rootfs is on
+     *    disk, hooks are idempotent (see [RootfsHook.idempotent] —
+     *    every shipped hook today qualifies). Re-runs hooks + baseline
+     *    without touching the rootfs files.
+     *
+     * No-op if current state isn't Error (already Ready, or in-flight).
+     * Issue #162 Phase 3d.
+     */
+    suspend fun retry() {
+        val err = _state.value as? SetupState.Error ?: return
+        val distro = activeDistro
+        when (err.phase) {
+            Phase.RootfsDownload, Phase.RootfsExtract -> {
+                Log.d(TAG, "[retry] wipe + reinstall for phase=${err.phase}")
+                deleteDistro(distro.id)
+                setActiveDistroId(distro.id)
+                installRootfs()
+            }
+            Phase.BootstrapHook, Phase.Baseline -> {
+                if (!isRootfsInstalled) {
+                    Log.d(TAG, "[retry] rootfs missing; falling through to full install")
+                    installRootfs()
+                    return
+                }
+                Log.d(TAG, "[retry] re-running post-extract setup for phase=${err.phase}")
+                val started = System.currentTimeMillis()
+                runPostExtractSetup(distro, started)
+            }
         }
     }
 

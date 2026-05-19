@@ -115,6 +115,7 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             onStart = { viewModel.startDesktop(it) },
             onStop = { viewModel.stopDesktop(it) },
             onUninstall = { viewModel.uninstallDesktop(it) },
+            onRetryRootfs = { viewModel.retryRootfsInstall() },
         )
     }
 
@@ -161,6 +162,7 @@ private fun DesktopManagerSection(
     onStart: (ProotManager.DesktopEnvironment) -> Unit,
     onStop: (ProotManager.DesktopEnvironment) -> Unit,
     onUninstall: (ProotManager.DesktopEnvironment) -> Unit,
+    onRetryRootfs: () -> Unit,
 ) {
     var distroMenuOpen by remember { mutableStateOf(false) }
 
@@ -311,6 +313,21 @@ private fun DesktopManagerSection(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        Spacer(Modifier.height(4.dp))
+                        // Retry — re-runs the failing layer. For
+                        // Download/Extract the underlying retry wipes
+                        // the rootfs and starts over (partial state is
+                        // the risk); for Hook/Baseline it re-runs
+                        // hooks + baseline against the existing
+                        // rootfs. Label reflects which path Retry
+                        // will take.
+                        val retryLabel = when (s.phase) {
+                            ProotManager.Phase.RootfsDownload,
+                            ProotManager.Phase.RootfsExtract -> "Wipe & retry"
+                            ProotManager.Phase.BootstrapHook,
+                            ProotManager.Phase.Baseline -> "Retry this step"
+                        }
+                        TextButton(onClick = onRetryRootfs) { Text(retryLabel) }
                     }
                     else -> { /* Ready / NotInstalled — silent */ }
                 }

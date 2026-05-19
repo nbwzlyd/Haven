@@ -252,6 +252,16 @@ class DesktopViewModel @Inject constructor(
         prootManager.resetDesktopState()
     }
 
+    /**
+     * Retry the failed install phase (issue #162 Phase 3d). Dispatches
+     * via `ProotManager.retry()` which inspects the current Error
+     * state and re-runs just the failing layer (or wipes-and-retries
+     * for the destructive Download/Extract phases).
+     */
+    fun retryRootfsInstall() {
+        viewModelScope.launch { prootManager.retry() }
+    }
+
     init {
         // Workspace launcher posts here when a DESKTOP / WAYLAND item
         // fires. The matching pager switch happens in HavenNavHost.

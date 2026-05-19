@@ -68,10 +68,20 @@ data class RootfsSource(
  * distro-specific bootstrap (e.g. `pacman-key --init`, writing
  * `/etc/apt/sources.list`). Phase 1 ships with an empty list for
  * Alpine.
+ *
+ * [idempotent] = true (the default) declares that the hook is safe
+ * to re-run after a failure. `ProotManager.retry()` invokes the
+ * full hook chain on a `Phase.BootstrapHook` retry, so any hook
+ * whose effect would compound on a second run (e.g. one that
+ * appends to a config file rather than overwriting it) must set
+ * this to false and the UI offers Wipe-and-retry instead. All
+ * shipped hooks today are idempotent (pkgdb sed-patch uses `g`,
+ * pacman-key/locale-gen/refresh-ca-certificates re-run cleanly).
  */
 data class RootfsHook(
     val id: String,
     val command: String,
+    val idempotent: Boolean = true,
 )
 
 /**
