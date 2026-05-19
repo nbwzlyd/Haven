@@ -55,6 +55,24 @@ type Conn struct {
 	c net.Conn
 }
 
+// UDPConn is an unconnected UDP socket inside the tunnel's gVisor netstack.
+// Send target is supplied per-WriteTo so the same conn can talk to many
+// peers (Mosh's "client roams, server identifies by nonce" model). Bound
+// to gomobile via [UDPRead] for the multi-value receive path.
+type UDPConn struct {
+	c net.PacketConn
+}
+
+// UDPRead packages a single ReadFrom result for gomobile, which only
+// supports single-value-plus-error returns. Empty Data + non-nil error
+// signals timeout (net.Error.Timeout()) or transport failure; callers
+// translate the timeout case to "return nil" (Mosh) or equivalent.
+type UDPRead struct {
+	Data     []byte
+	FromHost string
+	FromPort int
+}
+
 // StartTunnel parses a wg-quick style config and brings a tunnel up. The
 // returned handle must be closed via [TunnelHandle.Close]. Callers get a
 // clear error message on parse / handshake failure.
@@ -110,6 +128,31 @@ func (t *TunnelHandle) Dial(host string, port int, timeoutMs int) (*Conn, error)
 		return nil, fmt.Errorf("dial %s:%d: %w", host, port, err)
 	}
 	return &Conn{c: c}, nil
+}
+
+// ListenUDP opens an unconnected UDP socket inside the tunnel's netstack,
+// bound to an ephemeral local address. The netstack itself is what
+// guarantees the packets traverse the WireGuard tunnel rather than the
+// kernel's default route — this is the same path TCP [TunnelHandle.Dial]
+// uses, just for UDP.
+//
+// Returns an error if the tunnel is closed. The returned [UDPConn] must
+// be closed by the caller (or implicitly by [TunnelHandle.Close], which
+// invalidates all outstanding handles).
+func (t *TunnelHandle) ListenUDP() (*UDPConn, error) {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil, errors.New("tunnel closed")
+	}
+	tnet := t.tnet
+	t.mu.Unlock()
+
+	pc, err := tnet.ListenUDPAddrPort(netip.AddrPort{})
+	if err != nil {
+		return nil, fmt.Errorf("netstack ListenUDP: %w", err)
+	}
+	return &UDPConn{c: pc}, nil
 }
 
 // StartSocksListener lazily binds a 127.0.0.1 SOCKS5 listener fronting
@@ -192,6 +235,60 @@ func (c *Conn) Write(data []byte) error {
 // Close closes the connection. Idempotent.
 func (c *Conn) Close() error {
 	return c.c.Close()
+}
+
+// ReadFrom blocks until a datagram arrives or the deadline expires. A
+// timeoutMs <= 0 blocks indefinitely; >0 sets a one-shot read deadline.
+// On timeout returns ("", 0, net.Error) with .Timeout() true — the Kotlin
+// side checks for this and surfaces it as SocketTimeoutException for
+// behavioural parity with java.net.DatagramSocket.
+//
+// size caps the receive buffer. Mosh uses 2048 (RECV_BUF_SIZE) which is
+// well above the netstack's 1420-byte MTU; any pathological oversize
+// datagram is truncated to size bytes.
+func (u *UDPConn) ReadFrom(size int, timeoutMs int) (*UDPRead, error) {
+	if size <= 0 {
+		size = 2048
+	}
+	if timeoutMs > 0 {
+		_ = u.c.SetReadDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
+	} else {
+		_ = u.c.SetReadDeadline(time.Time{})
+	}
+	buf := make([]byte, size)
+	n, addr, err := u.c.ReadFrom(buf)
+	if err != nil {
+		return nil, err
+	}
+	udp, ok := addr.(*net.UDPAddr)
+	if !ok {
+		// gVisor's gonet.UDPConn always hands back *net.UDPAddr in
+		// practice, but be defensive — at least surface the string form
+		// so the caller can log something useful rather than panic on
+		// the type assertion.
+		return &UDPRead{Data: buf[:n], FromHost: addr.String(), FromPort: 0}, nil
+	}
+	return &UDPRead{Data: buf[:n], FromHost: udp.IP.String(), FromPort: udp.Port}, nil
+}
+
+// WriteTo sends data to host:port through the tunnel. host must be a
+// literal IP (Mosh always knows the server IP via the SSH bootstrap's
+// MOSH CONNECT line — no DNS resolution needed in the data path).
+// Returns an error if host fails to parse or the underlying netstack
+// write fails.
+func (u *UDPConn) WriteTo(data []byte, host string, port int) error {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("WriteTo: host %q is not an IP literal", host)
+	}
+	addr := &net.UDPAddr{IP: ip, Port: port}
+	_, err := u.c.WriteTo(data, addr)
+	return err
+}
+
+// Close closes the UDP socket. Idempotent.
+func (u *UDPConn) Close() error {
+	return u.c.Close()
 }
 
 // --- config parsing --------------------------------------------------------

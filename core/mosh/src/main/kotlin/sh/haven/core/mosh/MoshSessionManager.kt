@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import sh.haven.mosh.network.UdpSocketProvider
 import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -42,6 +43,13 @@ class MoshSessionManager @Inject constructor(
         val sshClient: Closeable? = null,
         /** Buffer for capturing transport logs when verbose logging is enabled. */
         val verboseBuffer: ConcurrentLinkedQueue<String>? = null,
+        /**
+         * UDP socket factory resolved at connect time. When non-null, the
+         * transport routes packets through it instead of a raw
+         * [java.net.DatagramSocket] — used for Mosh-over-tunnel sessions
+         * per #164. null = direct UDP (pre-#164 behaviour).
+         */
+        val socketProvider: UdpSocketProvider? = null,
     ) {
         enum class Status { CONNECTING, CONNECTED, DISCONNECTED, ERROR }
     }
@@ -89,11 +97,17 @@ class MoshSessionManager @Inject constructor(
         rows: Int,
         sshClient: Closeable? = null,
         verboseBuffer: ConcurrentLinkedQueue<String>? = null,
+        socketProvider: UdpSocketProvider? = null,
     ) {
         _sessions.value[sessionId]
             ?: throw IllegalStateException("Session $sessionId not found")
 
-        Log.d(TAG, "Connecting mosh session: $serverIp:$moshPort (ssh kept alive: ${sshClient != null})")
+        Log.d(
+            TAG,
+            "Connecting mosh session: $serverIp:$moshPort " +
+                "(ssh kept alive: ${sshClient != null}, " +
+                "tunneled: ${socketProvider != null})",
+        )
 
         _sessions.update { map ->
             val existing = map[sessionId] ?: return@update map
@@ -104,6 +118,7 @@ class MoshSessionManager @Inject constructor(
                 moshKey = moshKey,
                 sshClient = sshClient,
                 verboseBuffer = verboseBuffer,
+                socketProvider = socketProvider,
             ))
         }
     }
@@ -155,6 +170,8 @@ class MoshSessionManager @Inject constructor(
                 updateStatus(sessionId, SessionState.Status.DISCONNECTED)
             },
             verboseBuffer = session.verboseBuffer,
+            socketProvider = session.socketProvider
+                ?: UdpSocketProvider { sh.haven.mosh.network.AndroidUdpAdapter() },
         )
 
         _sessions.update { map ->

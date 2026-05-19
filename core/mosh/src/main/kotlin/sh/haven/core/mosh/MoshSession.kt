@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import sh.haven.mosh.MoshLogger
+import sh.haven.mosh.network.AndroidUdpAdapter
+import sh.haven.mosh.network.UdpSocketProvider
 import sh.haven.mosh.transport.MoshTransport
 import java.io.Closeable
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -35,6 +37,15 @@ class MoshSession(
     private val initialCols: Int = 80,
     private val initialRows: Int = 24,
     private val verboseBuffer: ConcurrentLinkedQueue<String>? = null,
+    /**
+     * UDP socket factory. Defaults to a plain
+     * [java.net.DatagramSocket] via [AndroidUdpAdapter]. When the
+     * profile selects a tunnel, [MoshSessionManager.connectSession]
+     * supplies a provider that routes UDP through the tunnel
+     * ([sh.haven.core.tunnel.TunneledDatagramSocket]) — fix for #164.
+     */
+    private val socketProvider: UdpSocketProvider =
+        UdpSocketProvider { AndroidUdpAdapter() },
 ) : Closeable {
 
     @Volatile
@@ -101,6 +112,7 @@ class MoshSession(
             logger = logger,
             initialCols = initialCols,
             initialRows = initialRows,
+            socketProvider = socketProvider,
         )
         transport = t
         t.start(scope)

@@ -21,6 +21,22 @@ interface Tunnel {
     fun dial(host: String, port: Int, timeoutMs: Int): TunneledConnection
 
     /**
+     * Open an unconnected UDP socket through the tunnel. Caller supplies
+     * the destination on every send; the inbound source is surfaced on
+     * every receive. Returned socket is owned by the caller and must be
+     * closed when done.
+     *
+     * Default implementation returns null — backends that can't carry
+     * UDP (Cloudflare Access via websocket, SOCKS/HTTP legacy proxies)
+     * opt out by inheriting the default and the caller falls through to
+     * a raw [java.net.DatagramSocket].
+     *
+     * Used by Mosh (#164) so packets traverse the tunnel rather than
+     * the device's default route.
+     */
+    fun listenUdp(): TunneledDatagramSocket? = null
+
+    /**
      * Lazily start a localhost SOCKS5 listener fronting this tunnel and
      * return its bound address (always 127.0.0.1, OS-assigned port).
      * Idempotent — subsequent calls return the same address. Closing the

@@ -3,9 +3,11 @@ package sh.haven.core.tunnel
 import sh.haven.rclone.binding.tsbridge.Conn as NativeConn
 import sh.haven.rclone.binding.tsbridge.Tsbridge
 import sh.haven.rclone.binding.tsbridge.TunnelHandle as NativeHandle
+import sh.haven.rclone.binding.tsbridge.UDPConn as NativeUDPConn
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 
@@ -49,6 +51,15 @@ class TailscaleTunnel internal constructor(
             throw IOException("Tailscale dial $host:$port failed: ${e.message}", e)
         }
         return TailscaleConnection(conn)
+    }
+
+    override fun listenUdp(): TunneledDatagramSocket? {
+        val udp = try {
+            native.listenUDP()
+        } catch (e: Exception) {
+            throw IOException("Tailscale listenUDP failed: ${e.message}", e)
+        }
+        return TailscaleDatagramSocket(udp)
     }
 
     override fun socksAddress(): InetSocketAddress? {
@@ -130,5 +141,56 @@ private class TailscaleConnection(
         try {
             conn.close()
         } catch (_: Throwable) { /* idempotent */ }
+    }
+}
+
+/**
+ * Wraps a native [NativeUDPConn] as [TunneledDatagramSocket]. Mirrors
+ * the WireGuard wrapper — same gomobile copy-out-of-fresh-slice pattern,
+ * same heuristic for translating Go's "i/o timeout" exception into a
+ * null return so the Mosh receive loop's contract holds for both
+ * backends.
+ */
+private class TailscaleDatagramSocket(
+    private val udp: NativeUDPConn,
+) : TunneledDatagramSocket {
+
+    override fun send(data: ByteArray, host: String, port: Int) {
+        try {
+            udp.writeTo(data, host, port.toLong())
+        } catch (e: Exception) {
+            throw IOException("Tailscale UDP writeTo $host:$port failed: ${e.message}", e)
+        }
+    }
+
+    override fun receive(buf: ByteArray, timeoutMs: Int): ReceivedPacket? {
+        val result = try {
+            udp.readFrom(buf.size.toLong(), timeoutMs.toLong())
+        } catch (e: Exception) {
+            if (isTimeoutException(e)) return null
+            throw IOException("Tailscale UDP readFrom failed: ${e.message}", e)
+        }
+        if (result == null) return null
+        val bytes = result.data ?: return null
+        val n = minOf(bytes.size, buf.size)
+        System.arraycopy(bytes, 0, buf, 0, n)
+        return ReceivedPacket(
+            length = n,
+            srcHost = result.fromHost,
+            srcPort = result.fromPort.toInt(),
+        )
+    }
+
+    override fun close() {
+        try {
+            udp.close()
+        } catch (_: Throwable) { /* idempotent */ }
+    }
+
+    private fun isTimeoutException(e: Throwable): Boolean {
+        if (e is InterruptedIOException) return true
+        val msg = e.message ?: return false
+        return msg.contains("i/o timeout", ignoreCase = true) ||
+            msg.contains("deadline exceeded", ignoreCase = true)
     }
 }

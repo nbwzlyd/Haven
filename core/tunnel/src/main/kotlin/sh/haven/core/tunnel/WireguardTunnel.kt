@@ -2,9 +2,11 @@ package sh.haven.core.tunnel
 
 import sh.haven.rclone.binding.wgbridge.Conn as NativeConn
 import sh.haven.rclone.binding.wgbridge.TunnelHandle as NativeHandle
+import sh.haven.rclone.binding.wgbridge.UDPConn as NativeUDPConn
 import sh.haven.rclone.binding.wgbridge.Wgbridge
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 
@@ -36,6 +38,15 @@ class WireguardTunnel internal constructor(configText: String) : Tunnel {
             throw IOException("WireGuard dial $host:$port failed: ${e.message}", e)
         }
         return NativeTunneledConnection(conn)
+    }
+
+    override fun listenUdp(): TunneledDatagramSocket? {
+        val udp = try {
+            native.listenUDP()
+        } catch (e: Exception) {
+            throw IOException("WireGuard listenUDP failed: ${e.message}", e)
+        }
+        return NativeTunneledDatagramSocket(udp)
     }
 
     override fun socksAddress(): InetSocketAddress? {
@@ -120,5 +131,61 @@ private class NativeTunneledConnection(
         } catch (_: Throwable) {
             // Already-closed connections raise here; ignore.
         }
+    }
+}
+
+/**
+ * Wraps a native [NativeUDPConn] as [TunneledDatagramSocket]. Identical
+ * shape to [NativeTunneledConnection] but for UDP — gomobile returns a
+ * fresh `[]byte` slice per receive, so we copy into the caller's buffer
+ * here rather than trying to share storage across JNI.
+ *
+ * Timeouts: the Go side translates `timeoutMs <= 0` to "no deadline"
+ * and `timeoutMs > 0` to a one-shot read deadline. When the deadline
+ * fires, gomobile surfaces the underlying `net.OpError` here as a Java
+ * exception whose message contains "i/o timeout" — we recognise that
+ * and return null to match [TunneledDatagramSocket]'s timeout contract.
+ */
+private class NativeTunneledDatagramSocket(
+    private val udp: NativeUDPConn,
+) : TunneledDatagramSocket {
+
+    override fun send(data: ByteArray, host: String, port: Int) {
+        try {
+            udp.writeTo(data, host, port.toLong())
+        } catch (e: Exception) {
+            throw IOException("WireGuard UDP writeTo $host:$port failed: ${e.message}", e)
+        }
+    }
+
+    override fun receive(buf: ByteArray, timeoutMs: Int): ReceivedPacket? {
+        val result = try {
+            udp.readFrom(buf.size.toLong(), timeoutMs.toLong())
+        } catch (e: Exception) {
+            if (isTimeoutException(e)) return null
+            throw IOException("WireGuard UDP readFrom failed: ${e.message}", e)
+        }
+        if (result == null) return null
+        val bytes = result.data ?: return null
+        val n = minOf(bytes.size, buf.size)
+        System.arraycopy(bytes, 0, buf, 0, n)
+        return ReceivedPacket(
+            length = n,
+            srcHost = result.fromHost,
+            srcPort = result.fromPort.toInt(),
+        )
+    }
+
+    override fun close() {
+        try {
+            udp.close()
+        } catch (_: Throwable) { /* idempotent */ }
+    }
+
+    private fun isTimeoutException(e: Throwable): Boolean {
+        if (e is InterruptedIOException) return true
+        val msg = e.message ?: return false
+        return msg.contains("i/o timeout", ignoreCase = true) ||
+            msg.contains("deadline exceeded", ignoreCase = true)
     }
 }

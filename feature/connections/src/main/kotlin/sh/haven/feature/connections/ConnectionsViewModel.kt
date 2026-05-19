@@ -2750,6 +2750,21 @@ class ConnectionsViewModel @Inject constructor(
         }
 
         val transportLogBuffer = if (verboseLogger != null) java.util.concurrent.ConcurrentLinkedQueue<String>() else null
+
+        // Mosh-over-tunnel (issue #164): when the profile selects a
+        // WireGuard or Tailscale tunnel, route the UDP socket through
+        // it. udpSocketSupplier returns null for direct profiles or
+        // for backends that can't carry UDP (Cloudflare Access,
+        // legacy SOCKS) — in which case Mosh falls through to a raw
+        // DatagramSocket exactly as it did before this change.
+        val socketProvider: sh.haven.mosh.network.UdpSocketProvider? = run {
+            val profile = repository.getById(profileId) ?: return@run null
+            val supplier = tunnelResolver.udpSocketSupplier(profile) ?: return@run null
+            sh.haven.mosh.network.UdpSocketProvider {
+                sh.haven.feature.connections.mosh.TunneledUdpAdapter(supplier())
+            }
+        }
+
         withContext(Dispatchers.IO) {
             moshSessionManager.connectSession(
                 sessionId = sessionId,
@@ -2760,6 +2775,7 @@ class ConnectionsViewModel @Inject constructor(
                 rows = 24,
                 sshClient = client,
                 verboseBuffer = transportLogBuffer,
+                socketProvider = socketProvider,
             )
         }
 

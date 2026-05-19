@@ -64,6 +64,55 @@ class TunnelResolver @Inject constructor(
         return proxySocketFactoryFor(profile)
     }
 
+    /**
+     * Resolve a UDP transport for [profile]. Returns a
+     * [TunneledDatagramSocket] when the profile selects a tunnel that
+     * can carry UDP (WireGuard, Tailscale); returns null when no tunnel
+     * is selected or the selected backend can't carry UDP (Cloudflare
+     * Access, legacy SOCKS/HTTP proxies — UDP ASSOCIATE is not
+     * supported here). Callers fall through to a plain
+     * [java.net.DatagramSocket] on null.
+     *
+     * Acquires the tunnel via [tunnelManager]; pair with [release] on
+     * the [ConnectionProfile.id] when the UDP socket is closed, same
+     * lifecycle contract as [dial].
+     *
+     * One-shot use. For callers that need to mint a fresh tunneled
+     * socket on every Mosh roaming-rebind, see [udpSocketSupplier].
+     */
+    suspend fun dialUdp(profile: ConnectionProfile): TunneledDatagramSocket? {
+        val tunnel = tunnelFor(profile) ?: return null
+        return tunnel.listenUdp()
+    }
+
+    /**
+     * Pre-acquire the tunnel and return a non-suspend factory that
+     * mints a fresh [TunneledDatagramSocket] each call. Mirrors
+     * [socketDialer] for UDP. Mosh's rebind path calls the factory
+     * each time the upstream socket goes stale; the underlying tunnel
+     * handle is reused across rebinds.
+     *
+     * Returns null when the profile has no tunnel or the tunnel can't
+     * carry UDP — caller falls through to a raw
+     * [java.net.DatagramSocket] (same behaviour as today's Mosh).
+     *
+     * The factory throws [java.io.IOException] if the tunnel was torn
+     * down between acquisition and a rebind attempt (e.g. user toggled
+     * the tunnel off mid-session). [MoshConnection.rebindSocket] catches
+     * and the receive loop continues, matching the existing
+     * "raw socket close" failure mode.
+     */
+    suspend fun udpSocketSupplier(
+        profile: ConnectionProfile,
+    ): (() -> TunneledDatagramSocket)? {
+        val tunnel = tunnelFor(profile) ?: return null
+        return {
+            tunnel.listenUdp() ?: throw java.io.IOException(
+                "Tunnel ${profile.tunnelConfigId} does not support UDP",
+            )
+        }
+    }
+
     suspend fun socksEndpoint(profile: ConnectionProfile): InetSocketAddress? {
         val tunnel = tunnelFor(profile) ?: return null
         return tunnel.socksAddress()

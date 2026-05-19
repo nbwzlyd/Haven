@@ -244,6 +244,20 @@ type Conn struct {
 	c net.Conn
 }
 
+// UDPConn is an unconnected UDP socket on the tailnet. Mirrors
+// wgbridge.UDPConn so the Kotlin TunneledDatagramSocket implementation
+// can treat both backends identically.
+type UDPConn struct {
+	c net.PacketConn
+}
+
+// UDPRead packages a single ReadFrom result. See wgbridge.UDPRead.
+type UDPRead struct {
+	Data     []byte
+	FromHost string
+	FromPort int
+}
+
 // StartTunnel brings up a tailnet using the given authkey and state
 // directory. hostname is advertised to the tailnet (shows up in the
 // admin console); blank picks tsnet's default.
@@ -361,6 +375,41 @@ func (t *TunnelHandle) Dial(host string, port int, timeoutMs int) (*Conn, error)
 	return &Conn{c: c}, nil
 }
 
+// ListenUDP opens an unconnected UDP socket on the tailnet, bound to the
+// node's own Tailscale IPv4 (or IPv6 if no v4 is assigned) on an
+// ephemeral port. Packets sent through this socket traverse the tailnet
+// rather than the device's default route — that's the entire point of
+// #164 for Mosh-over-tailnet.
+//
+// Returns an error if the tunnel is closed or if Tailscale hasn't been
+// assigned a usable IP yet (shouldn't happen post-[StartTunnel], which
+// blocks on peer-map sync).
+func (t *TunnelHandle) ListenUDP() (*UDPConn, error) {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil, errors.New("tunnel closed")
+	}
+	srv := t.srv
+	t.mu.Unlock()
+
+	ip4, ip6 := srv.TailscaleIPs()
+	var bind string
+	switch {
+	case ip4.IsValid():
+		bind = net.JoinHostPort(ip4.String(), "0")
+	case ip6.IsValid():
+		bind = net.JoinHostPort(ip6.String(), "0")
+	default:
+		return nil, errors.New("tailnet has not assigned a usable IP yet")
+	}
+	pc, err := srv.ListenPacket("udp", bind)
+	if err != nil {
+		return nil, fmt.Errorf("tsnet ListenPacket %s: %w", bind, err)
+	}
+	return &UDPConn{c: pc}, nil
+}
+
 // StartSocksListener lazily binds a 127.0.0.1 SOCKS5 listener fronting
 // this tailnet and returns its bound TCP port. Idempotent; closing the
 // tunnel tears the listener down. Mirrors wgbridge's equivalent — the
@@ -441,4 +490,47 @@ func (c *Conn) Write(data []byte) error {
 // Close closes the connection. Idempotent.
 func (c *Conn) Close() error {
 	return c.c.Close()
+}
+
+// ReadFrom matches wgbridge.UDPConn.ReadFrom — same timeout semantics
+// (timeoutMs <= 0 blocks; >0 sets a one-shot read deadline) and same
+// gomobile-friendly return shape.
+func (u *UDPConn) ReadFrom(size int, timeoutMs int) (*UDPRead, error) {
+	if size <= 0 {
+		size = 2048
+	}
+	if timeoutMs > 0 {
+		_ = u.c.SetReadDeadline(time.Now().Add(time.Duration(timeoutMs) * time.Millisecond))
+	} else {
+		_ = u.c.SetReadDeadline(time.Time{})
+	}
+	buf := make([]byte, size)
+	n, addr, err := u.c.ReadFrom(buf)
+	if err != nil {
+		return nil, err
+	}
+	udp, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return &UDPRead{Data: buf[:n], FromHost: addr.String(), FromPort: 0}, nil
+	}
+	return &UDPRead{Data: buf[:n], FromHost: udp.IP.String(), FromPort: udp.Port}, nil
+}
+
+// WriteTo sends data to host:port through the tailnet. host must be a
+// literal IP (Mosh always knows the server IP via the SSH bootstrap's
+// MOSH CONNECT line; MagicDNS resolution belongs in the SSH-bootstrap
+// path, not the per-packet UDP send path).
+func (u *UDPConn) WriteTo(data []byte, host string, port int) error {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("WriteTo: host %q is not an IP literal", host)
+	}
+	addr := &net.UDPAddr{IP: ip, Port: port}
+	_, err := u.c.WriteTo(data, addr)
+	return err
+}
+
+// Close closes the UDP socket. Idempotent.
+func (u *UDPConn) Close() error {
+	return u.c.Close()
 }
