@@ -29,10 +29,18 @@ runs:
       # runs inside the proot rootfs alongside glibc-based wayvnc, not
       # on Android. The NDK's bionic libc is incompatible. Same package
       # the F-Droid recipe installs at `sudo apt: gcc-aarch64-linux-gnu`.
+      #
+      # `libc6-dev-arm64-cross` and `libc6-dev-amd64-cross` ship the
+      # multi-arch glibc headers (e.g. bits/wordsize.h that pulls in
+      # via features-time64.h on Debian trixie) — the GHA Ubuntu image
+      # only has the native-arch libc6-dev, and `jlumbroso/free-disk-space`
+      # below strips even more. Without these, the cross gcc fails at
+      # compile time with "bits/wordsize.h: No such file or directory".
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y --no-install-recommends \
-          gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu
+          gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
+          gcc-x86-64-linux-gnu libc6-dev-amd64-cross
 
     - name: Set up JDK 17
       uses: actions/setup-java@v5
