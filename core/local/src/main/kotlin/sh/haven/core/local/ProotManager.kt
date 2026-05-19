@@ -1385,6 +1385,14 @@ chmod +x /root/.vnc/xstartup""")
                 } else {
                     Log.w(TAG, "[de-config ${de.spec.id}] no wayvnc shim asset for ABI ${android.os.Build.SUPPORTED_ABIS.toList()}")
                 }
+
+                // Seed fuzzel + foot configs and a small .desktop set so
+                // the auto-launched fuzzel picker has something to show
+                // on first connect. labwc-native uses writeDesktopConfigs
+                // for the same purpose; the nested-Wayland flow doesn't
+                // call that path because it pulls in waybar / labwc-menu
+                // bits that don't apply.
+                writeNestedWaylandFuzzelConfig()
             }
 
             Log.d(TAG, "[de-config ${de.spec.id}] complete")
@@ -1489,6 +1497,117 @@ chmod +x /root/.vnc/xstartup""")
     }
 
     /** Write mobile-optimized config files for waybar, fuzzel, and labwc menu. */
+    /**
+     * Configs the Phase-4 nested-Wayland compositors (Sway / Hyprland /
+     * Niri) need so the auto-launched `fuzzel` picker has visible
+     * entries on first connect. Distinct from the labwc-native
+     * [writeDesktopConfigs] path: no waybar, no labwc menu, no
+     * `launch-prefix=/usr/local/bin/launch` (that script doesn't exist
+     * in the rootfs and would crash the picker on a selection).
+     *
+     * Always-on entries: foot (terminal), htop. Conditional entries:
+     * thunar, mousepad, imv-wayland, mpv if those binaries are
+     * present in the rootfs at config time.
+     */
+    private fun writeNestedWaylandFuzzelConfig() {
+        val rootfsDir = activeRootfsDir
+        val root = File(rootfsDir, "root")
+
+        // fuzzel — large enough text for VNC at 1280x720; no
+        // launch-prefix because the labwc /usr/local/bin/launch hook
+        // isn't shipped (would crash on every selection).
+        File(root, ".config/fuzzel").mkdirs()
+        File(root, ".config/fuzzel/fuzzel.ini").writeText(
+            """
+            |[main]
+            |font=Noto Sans:size=14
+            |width=30
+            |lines=12
+            |prompt=>
+            |layer=overlay
+            """.trimMargin()
+        )
+
+        // foot — borderless, mobile-friendly font size.
+        File(root, ".config/foot").mkdirs()
+        File(root, ".config/foot/foot.ini").writeText(
+            """
+            |[main]
+            |font=monospace:size=11
+            |pad=2x2
+            |
+            |[csd]
+            |preferred=none
+            """.trimMargin()
+        )
+
+        // .desktop entries — write to both user and system dirs so
+        // fuzzel finds them regardless of $XDG_DATA_HOME / $XDG_DATA_DIRS.
+        val appsDir = File(root, ".local/share/applications").apply { mkdirs() }
+        val sysAppsDir = File(rootfsDir, "usr/share/applications").apply { mkdirs() }
+        val entries = mutableMapOf(
+            "foot.desktop" to """
+                |[Desktop Entry]
+                |Name=Terminal
+                |Exec=foot
+                |Icon=utilities-terminal
+                |Type=Application
+                |Categories=System;TerminalEmulator;
+                """.trimMargin(),
+            "htop.desktop" to """
+                |[Desktop Entry]
+                |Name=System Monitor
+                |Exec=foot -e htop
+                |Icon=utilities-system-monitor
+                |Type=Application
+                |Categories=System;Monitor;
+                """.trimMargin(),
+        )
+        data class AppEntry(val file: String, val binary: String, val content: String)
+        val conditional = listOf(
+            AppEntry("thunar.desktop", "usr/bin/thunar", """
+                |[Desktop Entry]
+                |Name=File Manager
+                |Exec=thunar
+                |Icon=system-file-manager
+                |Type=Application
+                |Categories=System;FileManager;
+                """.trimMargin()),
+            AppEntry("mousepad.desktop", "usr/bin/mousepad", """
+                |[Desktop Entry]
+                |Name=Text Editor
+                |Exec=mousepad
+                |Icon=accessories-text-editor
+                |Type=Application
+                |Categories=Utility;TextEditor;
+                """.trimMargin()),
+            AppEntry("imv.desktop", "usr/bin/imv-wayland", """
+                |[Desktop Entry]
+                |Name=Image Viewer
+                |Exec=imv-wayland
+                |Icon=image-x-generic
+                |Type=Application
+                |Categories=Graphics;Viewer;
+                """.trimMargin()),
+            AppEntry("mpv.desktop", "usr/bin/mpv", """
+                |[Desktop Entry]
+                |Name=Media Player
+                |Exec=mpv --player-operation-mode=pseudo-gui
+                |Icon=multimedia-video-player
+                |Type=Application
+                |Categories=AudioVideo;Video;
+                """.trimMargin()),
+        )
+        for (app in conditional) {
+            if (File(rootfsDir, app.binary).exists()) entries[app.file] = app.content
+        }
+        for ((name, content) in entries) {
+            File(appsDir, name).writeText(content)
+            File(sysAppsDir, name).writeText(content)
+        }
+        Log.d(TAG, "Seeded fuzzel + ${entries.size} .desktop entries for nested-Wayland")
+    }
+
     private fun writeDesktopConfigs() {
         val rootfsDir = activeRootfsDir
         val root = File(rootfsDir, "root")

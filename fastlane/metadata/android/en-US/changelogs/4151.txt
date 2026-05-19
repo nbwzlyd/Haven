@@ -3,9 +3,11 @@ v5.41.0 — Nested Wayland desktops actually render (#162 Phase 4)
 • New: Sway, Hyprland, and Niri are installable as nested-Wayland
   desktops on Arch / Alpine / (Sway on) Debian / Void. Tap a desktop
   and the in-app VNC viewer drops you into a wlroots compositor
-  running headless inside the proot rootfs, with foot auto-launched
-  so the first connect isn't blank. Pick from Settings → Distro &
-  Desktop → Install desktop.
+  running headless inside the proot rootfs, with the `fuzzel` app
+  picker auto-launched so the first connect lands on a list of
+  installable graphical apps rather than a blank canvas. `mod+d`
+  re-opens fuzzel any time. Pick from Settings → Distro & Desktop
+  → Install desktop.
 
 • Fix (the grey screen): wayvnc 0.9.x prefers ext-image-copy-capture
   over wlr-screencopy when both are available, but wlroots-0.19's

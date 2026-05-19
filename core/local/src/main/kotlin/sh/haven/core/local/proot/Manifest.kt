@@ -531,10 +531,10 @@ object DesktopCatalog {
         id = "sway",
         label = "Sway (nested Wayland)",
         packagesPerFamily = mapOf(
-            PackageFamily.APK to listOf("sway", "wayvnc", "foot", "xkeyboard-config", "font-noto"),
-            PackageFamily.APT to listOf("sway", "wayvnc", "foot", "fonts-noto-core"),
-            PackageFamily.PACMAN to listOf("sway", "wayvnc", "foot", "noto-fonts"),
-            PackageFamily.XBPS to listOf("sway", "wayvnc", "foot", "noto-fonts-ttf"),
+            PackageFamily.APK to listOf("sway", "wayvnc", "foot", "fuzzel", "xkeyboard-config", "font-noto"),
+            PackageFamily.APT to listOf("sway", "wayvnc", "foot", "fuzzel", "fonts-noto-core"),
+            PackageFamily.PACMAN to listOf("sway", "wayvnc", "foot", "fuzzel", "noto-fonts"),
+            PackageFamily.XBPS to listOf("sway", "wayvnc", "foot", "fuzzel", "noto-fonts-ttf"),
         ),
         verifyBinary = "usr/bin/sway",
         launch = LaunchSpec.NestedWayland(compositorCmd = "sway"),
@@ -574,12 +574,15 @@ object DesktopCatalog {
 
                 bindsym ${'$'}mod+Return exec ${'$'}term
                 bindsym ${'$'}mod+q kill
-                bindsym ${'$'}mod+d exec ${'$'}term -e sh -lc 'compgen -c | sort -u | head -100; read -p "cmd: " c; exec ${'$'}c'
+                bindsym ${'$'}mod+d exec fuzzel
                 bindsym ${'$'}mod+Shift+e exit
 
-                # Auto-launch a terminal so a fresh VNC connection has something
-                # to interact with. wayvnc-only sessions are otherwise blank.
-                exec sleep 1 && foot
+                # Auto-launch the fuzzel app picker so a fresh VNC
+                # connection lands on something the user can interact
+                # with — wayvnc-only sessions are otherwise blank.
+                # fuzzel exits after the user picks (or presses Esc),
+                # leaving sway itself in place; mod+d re-opens it.
+                exec sleep 1 && fuzzel
             """.trimIndent(),
         ),
     )
@@ -588,15 +591,15 @@ object DesktopCatalog {
         id = "hyprland",
         label = "Hyprland (nested Wayland)",
         packagesPerFamily = mapOf(
-            PackageFamily.APK to listOf("hyprland", "wayvnc", "foot", "xkeyboard-config", "font-noto"),
+            PackageFamily.APK to listOf("hyprland", "wayvnc", "foot", "fuzzel", "xkeyboard-config", "font-noto"),
             // Debian (Bookworm / Bookworm-backports / Trixie) does NOT
             // package hyprland — verified via packages.debian.org search.
             // Users on Debian get the slot greyed out with a "not packaged
             // upstream" tag once the install dialog surfaces that case;
             // omitting APT here keeps the install path from offering a
             // package list it cannot satisfy.
-            PackageFamily.PACMAN to listOf("hyprland", "wayvnc", "foot", "noto-fonts"),
-            PackageFamily.XBPS to listOf("hyprland", "wayvnc", "foot", "noto-fonts-ttf"),
+            PackageFamily.PACMAN to listOf("hyprland", "wayvnc", "foot", "fuzzel", "noto-fonts"),
+            PackageFamily.XBPS to listOf("hyprland", "wayvnc", "foot", "fuzzel", "noto-fonts-ttf"),
         ),
         verifyBinary = "usr/bin/Hyprland",
         launch = LaunchSpec.NestedWayland(compositorCmd = "Hyprland"),
@@ -636,12 +639,14 @@ object DesktopCatalog {
                 ${'$'}mod = SUPER
 
                 bind = ${'$'}mod, Return, exec, foot
+                bind = ${'$'}mod, D, exec, fuzzel
                 bind = ${'$'}mod, Q, killactive
                 bind = ${'$'}mod SHIFT, E, exit
 
-                # Auto-launch a terminal — wayvnc-only sessions are otherwise
-                # blank on first connect.
-                exec-once = sleep 1 && foot
+                # Auto-launch the fuzzel app picker so a fresh VNC
+                # connection lands on something to interact with —
+                # wayvnc-only sessions are otherwise blank.
+                exec-once = sleep 1 && fuzzel
             """.trimIndent(),
         ),
     )
@@ -652,8 +657,8 @@ object DesktopCatalog {
         packagesPerFamily = mapOf(
             // Alpine 3.21 community + Debian bookworm/trixie do NOT
             // package niri — Arch and Void are the practical paths.
-            PackageFamily.PACMAN to listOf("niri", "wayvnc", "foot", "noto-fonts"),
-            PackageFamily.XBPS to listOf("niri", "wayvnc", "foot", "noto-fonts-ttf"),
+            PackageFamily.PACMAN to listOf("niri", "wayvnc", "foot", "fuzzel", "noto-fonts"),
+            PackageFamily.XBPS to listOf("niri", "wayvnc", "foot", "fuzzel", "noto-fonts-ttf"),
         ),
         verifyBinary = "usr/bin/niri",
         launch = LaunchSpec.NestedWayland(compositorCmd = "niri"),
@@ -685,11 +690,14 @@ object DesktopCatalog {
 
                 binds {
                     Mod+Return { spawn "foot"; }
+                    Mod+D { spawn "fuzzel"; }
                     Mod+Q { close-window; }
                     Mod+Shift+E { quit; }
                 }
 
-                spawn-at-startup "foot"
+                // Auto-launch the fuzzel app picker so a fresh VNC
+                // connection lands on something to interact with.
+                spawn-at-startup "fuzzel"
             """.trimIndent(),
         ),
     )
