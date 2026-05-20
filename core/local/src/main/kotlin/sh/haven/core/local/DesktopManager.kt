@@ -600,8 +600,16 @@ class DesktopManager @Inject constructor(
                     // virgl GPU passthrough env vars
                     "export GALLIUM_DRIVER=virpipe; " +
                     "export VTEST_SOCKET=/tmp/.virgl_test; " +
-                    // App launcher wrapper
-                    "mkdir -p /usr/local/bin; printf '#!/bin/sh\\n\"\\$@\" &\\n' > /usr/local/bin/launch && chmod +x /usr/local/bin/launch; " +
+                    // App launcher wrapper — invoked via fuzzel's
+                    // `launch-prefix=/usr/local/bin/launch` and by labwc's
+                    // menu Execute actions. Records each invocation +
+                    // launched PID + the spawned command's own stderr to
+                    // /tmp/haven-launch.log so we can diagnose tap-launch
+                    // failures (see GlassHaven/Haven#161 follow-up: blank
+                    // glyphs / fuzzel-doesn't-launch-on-tap). Without
+                    // this, fuzzel forks the prefix script with no record
+                    // of whether the click was even received.
+                    "mkdir -p /usr/local/bin; cat > /usr/local/bin/launch <<'LAUNCHEOF'\n#!/bin/sh\nLOG=/tmp/haven-launch.log\necho \"[\$(date +%H:%M:%S)] launch \$*\" >> \"\$LOG\" 2>/dev/null\n\"\$@\" >> \"\$LOG\" 2>&1 &\necho \"[\$(date +%H:%M:%S)] launched pid=\$!\" >> \"\$LOG\" 2>/dev/null\nLAUNCHEOF\nchmod +x /usr/local/bin/launch; " +
                     // Set up XWayland for X11 app compatibility
                     "mkdir -p /tmp/.X11-unix; " +
                     "i=0; while ! ls /tmp/.X11-unix/X* >/dev/null 2>&1 && [ \$i -lt 5 ]; do sleep 1; i=\$((i+1)); done; " +
