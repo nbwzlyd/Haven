@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +44,11 @@ import javax.inject.Singleton
 import kotlin.concurrent.thread
 
 private const val TAG = "McpServer"
+
+/** Max time to wait for the user to answer a consent prompt before returning a
+ *  retryable error. Kept below the 10s socket timeout so the connection isn't
+ *  dropped mid-wait. */
+private const val CONSENT_WAIT_MS: Long = 8_000L
 
 /**
  * Minimal Model Context Protocol (MCP) server for Haven.
@@ -761,16 +767,28 @@ class McpServer @Inject constructor(
                 Log.w(TAG, "summary builder for '$name' threw: ${e.message}")
                 name
             }
+            // Bound the wait so a prompt the user hasn't answered doesn't block
+            // the handler past the socket / client timeout (which surfaced as
+            // "operation timed out" / "socket closed"). On timeout, return a
+            // retryable error rather than hanging — and never auto-allow.
             val decision = runBlocking {
-                consentManager.requestConsent(
-                    toolName = name,
-                    clientHint = lastClientHint,
-                    summary = summary,
-                    level = consent.level,
-                )
+                withTimeoutOrNull(CONSENT_WAIT_MS) {
+                    consentManager.requestConsent(
+                        toolName = name,
+                        clientHint = lastClientHint,
+                        summary = summary,
+                        level = consent.level,
+                    )
+                }
             }
-            if (decision == ConsentDecision.DENY) {
-                throw ConsentDeniedError(name)
+            when (decision) {
+                ConsentDecision.DENY -> throw ConsentDeniedError(name)
+                null -> throw McpError(
+                    -32012,
+                    "Consent prompt for '$name' wasn't answered in time — approve it on the device " +
+                        "and retry. (Once approved for this session, further calls won't prompt.)",
+                )
+                else -> { /* ALLOW — proceed */ }
             }
         }
         val content = try {

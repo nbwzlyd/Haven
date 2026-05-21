@@ -722,7 +722,12 @@ internal class McpTools(
                 })
                 put("required", JSONArray().put("sessionId").put("text"))
             },
-            consentLevel = ConsentLevel.EVERY_CALL,
+            // Once the user approves the agent typing into a session, per-call
+            // re-approval is friction without added safety — the session is
+            // already agent-controlled, and EVERY_CALL made interactive shell
+            // driving unusable (each keystroke-batch blocked the request on a
+            // device tap and timed out when unattended). Matches open_local_shell.
+            consentLevel = ConsentLevel.ONCE_PER_SESSION,
             summarise = { args ->
                 val text = args.optString("text", "")
                 val preview = if (text.length > 80) text.substring(0, 80) + "…" else text
@@ -2441,18 +2446,29 @@ internal class McpTools(
         // sessionId can come from either the SSH or the local-shell
         // manager; try both rather than forcing the agent to know
         // which transport it's looking at.
-        val bytes = sshSessionManager.readAgentScrollback(sessionId, capped)
+        val sshBytes = sshSessionManager.readAgentScrollback(sessionId, capped)
+        val bytes = sshBytes
             ?: localSessionManager.readAgentScrollback(sessionId, capped)
             ?: throw McpError(
                 -32603,
                 "No scrollback available for session $sessionId — open a terminal tab on this session first",
             )
+        // Whether the underlying session has ended. Without this an agent
+        // can't tell a quiet shell from a dead one — the ring keeps returning
+        // the last output (e.g. frozen at the login banner) with no signal.
+        val ended = if (sshBytes != null) {
+            sshSessionManager.getSession(sessionId) == null
+        } else {
+            val ls = localSessionManager.getActiveSession(sessionId)
+            ls == null || !ls.isAlive()
+        }
         return JSONObject().apply {
             put("sessionId", sessionId)
             put("byteCount", bytes.size)
             // UTF-8 with malformed-replacement so any partial codepoint
             // at the buffer head doesn't poison the whole response.
             put("text", String(bytes, Charsets.UTF_8))
+            put("ended", ended)
         }
     }
 
@@ -3582,12 +3598,19 @@ internal class McpTools(
             // the original plain choice — see LocalSessionManager.startHeadlessShell.
             localSessionManager.startHeadlessShell(sessionId, plain = plain)
         }
+        // The PTY reader thread starts asynchronously, so wait briefly for the
+        // shell's first output before returning — otherwise an immediate
+        // send_terminal_input / read_terminal_scrollback races an unattached
+        // PTY (input ignored, scrollback empty). `ready` tells the agent
+        // whether output is already flowing.
+        val ready = localSessionManager.awaitFirstOutput(sessionId)
         JSONObject().apply {
             put("sessionId", sessionId)
             put("profileId", profile.id)
             put("label", profile.label)
             put("reused", alive != null)
             put("plain", plain)
+            put("ready", ready)
         }
     }
 

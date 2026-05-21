@@ -6,6 +6,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -239,7 +240,19 @@ class LocalSessionManager @Inject constructor(
             onDataReceived = onDataReceived,
             onExited = { exitCode ->
                 Log.d(TAG, "Session $sessionId process exited: $exitCode")
-                updateStatus(sessionId, SessionState.Status.DISCONNECTED)
+                // Mark DISCONNECTED and drop the dead LocalSession in one
+                // update so sendInput / getActiveSession stop routing to a
+                // closed fd (which would swallow writes and report a false
+                // success). The agentScrollback ring is left intact so the
+                // final output stays readable after the process exits.
+                _sessions.update { map ->
+                    val existing = map[sessionId] ?: return@update map
+                    existing.localSession?.close()
+                    map + (sessionId to existing.copy(
+                        status = SessionState.Status.DISCONNECTED,
+                        localSession = null,
+                    ))
+                }
             },
         )
 
@@ -358,8 +371,36 @@ class LocalSessionManager @Inject constructor(
             ?: throw IllegalStateException("No local session: $sessionId")
         val localSession = session.localSession
             ?: throw IllegalStateException(
-                "Local session $sessionId has no active process — call open_local_shell first")
+                "Local session $sessionId has ended — open_local_shell again")
+        // The reader thread may have hit EOF (process exited) a beat before
+        // onExited cleared the reference; reject loudly rather than writing
+        // into a closed fd that swallows the bytes and reports false success.
+        if (!localSession.isAlive()) {
+            throw IllegalStateException(
+                "Local session $sessionId has ended — open_local_shell again")
+        }
         localSession.sendInput(text.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Suspend until the agent scrollback ring for [sessionId] has received
+     * its first bytes (the shell printed its prompt/banner) or [timeoutMs]
+     * elapses. Returns true if any output arrived. Lets `open_local_shell`
+     * hand back a session that's immediately usable instead of racing the
+     * asynchronously-started PTY reader thread.
+     */
+    suspend fun awaitFirstOutput(sessionId: String, timeoutMs: Long = 1500L): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        fun hasOutput() = (agentScrollback[sessionId]?.totalBytesAppended ?: 0L) > 0L
+        while (System.currentTimeMillis() < deadline) {
+            if (hasOutput()) return true
+            // A shell that exits instantly (e.g. a broken env) never prints a
+            // prompt — stop waiting once it's no longer connected.
+            val status = _sessions.value[sessionId]?.status
+            if (status != null && status != SessionState.Status.CONNECTED) break
+            delay(40)
+        }
+        return hasOutput()
     }
 
     /**

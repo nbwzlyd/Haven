@@ -96,6 +96,13 @@ class LocalSession(
     }
 
     /**
+     * True while the child process and its reader thread are live. Goes false
+     * once the PTY hits EOF (process exited) or [close] runs — used so callers
+     * can fail a write loudly instead of silently dropping it into a dead fd.
+     */
+    fun isAlive(): Boolean = !closed && childPid > 0 && readerThread?.isAlive == true
+
+    /**
      * Send keyboard input to the PTY.
      */
     fun sendInput(data: ByteArray) {
