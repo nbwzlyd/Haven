@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -37,10 +38,13 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardHide
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +53,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
@@ -87,6 +92,13 @@ fun WaylandDesktopView(
     var overlayVisible by remember { mutableStateOf(false) }
     var benchmarkRunning by remember { mutableStateOf(false) }
     var textureViewRef by remember { mutableStateOf<android.view.View?>(null) }
+    // Desktop resolution control (#161). The compositor renders at a logical
+    // mode that Android upscales; nativeSetZoom(permille, commit=true) rescales
+    // that mode AND reflows windows (unlike the Compose-level pinch zoom below,
+    // which is purely visual). 1000 = the surface-derived default; lower
+    // permille = higher resolution / more workspace, higher = larger UI.
+    var displayScalePermille by rememberSaveable { mutableIntStateOf(1000) }
+    var scaleMenuOpen by remember { mutableStateOf(false) }
     DisposableEffect(Unit) {
         onDispose {
             WaylandBridge.nativeSetSurface(null)
@@ -194,6 +206,12 @@ fun WaylandDesktopView(
                                 st.setDefaultBufferSize(w, h)
                                 nativeSurface = Surface(st)
                                 WaylandBridge.nativeSetSurface(nativeSurface)
+                                // nativeSetSurface resets the output to the
+                                // surface-derived default mode, so re-apply a
+                                // non-default resolution choice (#161).
+                                if (displayScalePermille != 1000) {
+                                    WaylandBridge.nativeSetZoom(displayScalePermille, true)
+                                }
                             }
                             override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
                                 android.util.Log.i("WaylandTV", "TextureSizeChanged: ${w}x${h} initial=${initialWidth}x${initialHeight}")
@@ -414,6 +432,17 @@ fun WaylandDesktopView(
                                 Icon(Icons.Default.FullscreenExit, contentDescription = "Reset zoom")
                             }
                         }
+                        ResolutionScaleButton(
+                            currentPermille = displayScalePermille,
+                            expanded = scaleMenuOpen,
+                            onExpandedChange = { scaleMenuOpen = it },
+                            onSelect = {
+                                displayScalePermille = it
+                                WaylandBridge.nativeSetZoom(it, true)
+                            },
+                            buttonSizeDp = 48,
+                            iconSizeDp = 24,
+                        )
                         IconButton(onClick = {
                             val bench = File(context.applicationInfo.nativeLibraryDir, "libbenchmark_gles.so")
                             if (bench.canExecute()) {
@@ -466,6 +495,17 @@ fun WaylandDesktopView(
                 ) {
                     Icon(Icons.Default.Keyboard, contentDescription = "Toggle keyboard", modifier = Modifier.size(18.dp))
                 }
+                ResolutionScaleButton(
+                    currentPermille = displayScalePermille,
+                    expanded = scaleMenuOpen,
+                    onExpandedChange = { scaleMenuOpen = it },
+                    onSelect = {
+                        displayScalePermille = it
+                        WaylandBridge.nativeSetZoom(it, true)
+                    },
+                    buttonSizeDp = 32,
+                    iconSizeDp = 18,
+                )
                 IconButton(
                     onClick = {
                         val bench = File(context.applicationInfo.nativeLibraryDir, "libbenchmark_gles.so")
@@ -499,6 +539,44 @@ fun WaylandDesktopView(
         onFullscreenChanged(fullscreen)
     }
     } // Column
+}
+
+/**
+ * Desktop-resolution / display-scale control for labwc-native (#161).
+ * Each option is a zoom permille handed to [WaylandBridge.nativeSetZoom] with
+ * commit=true, which rescales the compositor output mode and reflows windows
+ * (a real resolution change, unlike the Compose-level pinch zoom). The
+ * permille doubles as a UI-scale percentage: 1000 = 100% (surface default),
+ * lower = more workspace / smaller UI, higher = larger UI / less workspace.
+ */
+@Composable
+private fun ResolutionScaleButton(
+    currentPermille: Int,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (Int) -> Unit,
+    buttonSizeDp: Int,
+    iconSizeDp: Int,
+) {
+    val options = listOf(50, 75, 100, 150, 200)
+    Box {
+        IconButton(onClick = { onExpandedChange(true) }, modifier = Modifier.size(buttonSizeDp.dp)) {
+            Icon(
+                Icons.Default.AspectRatio,
+                contentDescription = "Display scale",
+                modifier = Modifier.size(iconSizeDp.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            for (pct in options) {
+                val permille = pct * 10
+                DropdownMenuItem(
+                    text = { Text(if (permille == currentPermille) "$pct%  ✓" else "$pct%") },
+                    onClick = { onSelect(permille); onExpandedChange(false) },
+                )
+            }
+        }
+    }
 }
 
 /** Map Android KeyEvent keyCode to Linux evdev scancode (input-event-codes.h). */
