@@ -133,6 +133,9 @@ class ConnectionsViewModelSessionTest {
             sshKeyRepository = mockk(relaxed = true) {
                 every { observeAll() } returns flowOf(emptyList())
             },
+            totpSecretRepository = mockk(relaxed = true) {
+                every { observeAll() } returns flowOf(emptyList())
+            },
             preferencesRepository = mockk(relaxed = true) {
                 every { sessionManager } returns flowOf(mockk(relaxed = true) {
                     every { label } returns "None"
