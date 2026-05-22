@@ -1249,6 +1249,34 @@ internal class McpTools(
             },
         ) { args -> captureDesktop(args) },
 
+        "launch_app_in_desktop" to ToolHandler(
+            description = "Launch a GUI application into a RUNNING X11/VNC desktop (deId), with DISPLAY/XAUTHORITY/HOME and the software-GL fallback (LIBGL_ALWAYS_SOFTWARE=1, GALLIUM_DRIVER=llvmpipe) already exported so GPU-less GL apps like KiCad/eeschema don't crash their canvas. Optionally waits for the app's window to appear and returns its windowId — pass that to capture_desktop to screenshot just that window. The app keeps running after this returns. For looking at saved design FILES prefer view_file (headless, no desktop needed); use this when you need the live interactive app.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deId", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Desktop environment id (e.g. \"xfce4\") of a RUNNING X11/VNC desktop.")
+                    })
+                    put("command", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Shell command to launch, e.g. 'eeschema /root/proj/board.kicad_sch'.")
+                    })
+                    put("waitForWindowTitle", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "If set, poll until a window whose title contains this substring (case-insensitive) appears; otherwise return the first new window seen.")
+                    })
+                    put("timeoutMs", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Max ms to wait for the window. Default 15000, clamped 0..60000. 0 = launch and return without waiting.")
+                    })
+                })
+                put("required", JSONArray().put("deId").put("command"))
+            },
+            consentLevel = ConsentLevel.ONCE_PER_SESSION,
+            summarise = { args -> "Launch '${args.optString("command")}' on desktop '${args.optString("deId")}'" },
+        ) { args -> launchAppInDesktop(args) },
+
         "view_file" to ToolHandler(
             description = "Render a file from the ACTIVE proot guest to an INLINE image the agent can see directly — no desktop, X server, VNC client, or GPU needed (fully headless / GL-free). Handles .kicad_sch and .kicad_pcb (via kicad-cli), .pdf (first page, or `page`), .svg, and raster images (png/jpg/jpeg/webp/bmp/gif). The result is downscaled to maxWidth and returned as an image content block, so it works even when no VNC desktop is running. Prefer this over capture_desktop for looking at design output (schematics, PCBs, PDFs, plots).",
             inputSchema = JSONObject().apply {
@@ -5272,6 +5300,74 @@ internal class McpTools(
             bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
         return Triple(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), bmp.width, bmp.height)
+    }
+
+    /**
+     * Launch a GUI app into a running X11 desktop (software-GL fallback set
+     * by [DesktopManager.launchApp]) and optionally poll [listWindows] until
+     * its window appears, returning the windowId so the agent can capture it.
+     */
+    private suspend fun launchAppInDesktop(args: JSONObject): JSONObject {
+        val deId = args.optString("deId").takeIf { it.isNotBlank() }
+            ?: throw McpError(-32602, "deId is required")
+        val command = args.optString("command").takeIf { it.isNotBlank() }
+            ?: throw McpError(-32602, "command is required")
+        val waitTitle = args.optString("waitForWindowTitle").takeIf { it.isNotBlank() }
+        val timeoutMs = args.optInt("timeoutMs", 15000).coerceIn(0, 60000)
+        val de = desktopByIdOrThrow(deId)
+        val dm = localSessionManager.desktopManager
+
+        // Snapshot existing windows so we can spot the NEW one.
+        val before: Set<String> = try {
+            dm.listWindows(de).map { it.id }.toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+        val appId = try {
+            dm.launchApp(de, command)
+        } catch (e: Exception) {
+            throw McpError(-32603, e.message ?: "launch failed")
+        }
+
+        var winId: String? = null
+        var winTitle = ""
+        if (timeoutMs > 0) {
+            val deadline = System.currentTimeMillis() + timeoutMs
+            while (System.currentTimeMillis() < deadline && winId == null) {
+                kotlinx.coroutines.delay(600)
+                val wins = try { dm.listWindows(de) } catch (e: Exception) { emptyList() }
+                val w = if (waitTitle != null) {
+                    wins.firstOrNull { it.title.contains(waitTitle, ignoreCase = true) }
+                } else {
+                    wins.firstOrNull { it.id !in before && it.title.isNotBlank() }
+                        ?: wins.firstOrNull { it.id !in before }
+                }
+                if (w != null) {
+                    winId = w.id
+                    winTitle = w.title
+                }
+            }
+        }
+        return JSONObject().apply {
+            put("deId", de.spec.id)
+            put("appId", appId)
+            put("command", command)
+            if (winId != null) {
+                put("windowId", winId)
+                put("windowTitle", winTitle)
+                put("hint", "pass windowId to capture_desktop to screenshot just this window")
+            } else {
+                put("windowId", JSONObject.NULL)
+                put(
+                    "note",
+                    if (timeoutMs == 0) {
+                        "launched without waiting for a window"
+                    } else {
+                        "no matching window within ${timeoutMs}ms (still starting? try list_desktop_windows)"
+                    },
+                )
+            }
+        }
     }
 
     /**

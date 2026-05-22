@@ -458,6 +458,42 @@ class DesktopManager @Inject constructor(
         }
     }
 
+    // Apps launched into a running desktop via launch_app_in_desktop,
+    // keyed by an opaque appId. We hold the Process so its reader thread
+    // keeps draining the combined stdout+stderr (so a chatty GL app never
+    // blocks on a full pipe); proot stays alive for the app's lifetime
+    // because the command runs in the foreground (exec), so --kill-on-exit
+    // doesn't reap the GUI app.
+    private val appProcesses = java.util.concurrent.ConcurrentHashMap<String, Process>()
+
+    /**
+     * Launch a GUI [command] into the running X11 desktop [de] with
+     * DISPLAY/XAUTHORITY/HOME and the software-GL fallback exported, so
+     * GPU-less GL apps (KiCad/eeschema) don't crash their canvas. Returns
+     * an opaque appId. Fire-and-forget: callers poll [listWindows] to learn
+     * when the window appears. Throws if [de] is not a running X11 desktop.
+     */
+    fun launchApp(de: ProotManager.DesktopEnvironment, command: String): String {
+        val display = requireX11Display(de)
+        val appId = "deapp-${System.currentTimeMillis()}"
+        val env =
+            "export DISPLAY=:$display; export XAUTHORITY=/root/.Xauthority; export HOME=/root; " +
+                "export LIBGL_ALWAYS_SOFTWARE=1; export GALLIUM_DRIVER=llvmpipe; "
+        val proc = prootManager.startCommandInProot("$env exec $command")
+        appProcesses[appId] = proc
+        Thread({
+            try {
+                proc.inputStream.bufferedReader().forEachLine { line ->
+                    Log.d(TAG, "$appId[:$display]: $line")
+                }
+            } catch (_: Exception) {
+            } finally {
+                appProcesses.remove(appId)
+            }
+        }, appId).apply { isDaemon = true }.start()
+        return appId
+    }
+
     // ---- X11/VNC desktop launch (software rendering, no virgl) ----
 
     private fun launchX11Desktop(
@@ -498,7 +534,13 @@ class DesktopManager @Inject constructor(
                 "sleep 3; " +
                 "export DISPLAY=:${display}; " +
                 "export HOME=/root; " +
-                // NO virgl — software rendering for VNC desktops
+                // NO virgl — software rendering for VNC desktops. Force the
+                // Mesa software rasteriser so GPU-less GL apps (KiCad/eeschema)
+                // don't crash their OpenGL canvas, and paint a solid root so a
+                // never-drawn desktop isn't a pure-black capture. Both
+                // best-effort — never fail the launch if the tool is absent.
+                "export LIBGL_ALWAYS_SOFTWARE=1; export GALLIUM_DRIVER=llvmpipe; " +
+                "xsetroot -solid '#202830' 2>/dev/null || true; " +
                 "${launch.startCommands} " +
                 "wait"
 
