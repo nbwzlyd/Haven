@@ -169,7 +169,17 @@ object UsbProxyProtocol {
         return buf
     }
 
-    private fun DataInputStream.readBytes(): ByteArray = readAllBytes()
+    /** Read all remaining bytes. (Not InputStream.readAllBytes — that's API 33+, minSdk is 26.) */
+    private fun DataInputStream.readBytes(): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(4096)
+        while (true) {
+            val n = read(buf)
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
 
     private inline fun buildBytes(block: DataOutputStream.() -> Unit): ByteArray {
         val bos = java.io.ByteArrayOutputStream()
