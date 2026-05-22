@@ -1263,6 +1263,55 @@ class ProotManager @Inject constructor(
     }
 
     /**
+     * Ensure the headless render tools used by the `view_file` MCP tool are
+     * present — `rsvg-convert` (SVG→PNG) and/or `pdftoppm` (PDF→PNG). Only the
+     * binaries in [needed] are probed and, if missing, installed. Mirrors
+     * [ensureCaptureTools]; returns (ready, detail). Package names differ per
+     * family, so if a binary is still absent after the install attempt the
+     * caller gets an honest failure rather than a silent miss. `kicad-cli` is
+     * NOT handled here — it ships with KiCad and is too heavy to auto-install.
+     */
+    suspend fun ensureRenderTools(needed: List<String>): Pair<Boolean, String> {
+        if (needed.isEmpty()) return true to "no render tools needed"
+        val probeCmd = buildString {
+            append("for b in ${needed.joinToString(" ")}; do ")
+            append("command -v \$b >/dev/null 2>&1 || { echo MISSING; exit 0; }; ")
+            append("done; echo HAVE")
+        }
+        val (probe, _) = runCommandInProot(probeCmd)
+        if (probe.contains("HAVE")) return true to "render tools already present"
+
+        val family = activeDistro.family
+        fun pkgFor(bin: String): String? = when (bin) {
+            "rsvg-convert" -> when (family) {
+                PackageFamily.APT -> "librsvg2-bin"
+                PackageFamily.PACMAN -> "librsvg"
+                PackageFamily.XBPS -> "librsvg-utils"
+                PackageFamily.APK -> "rsvg-convert"
+                PackageFamily.NIX -> null
+            }
+            "pdftoppm" -> when (family) {
+                PackageFamily.PACMAN -> "poppler"
+                PackageFamily.APT, PackageFamily.XBPS, PackageFamily.APK -> "poppler-utils"
+                PackageFamily.NIX -> null
+            }
+            else -> null
+        }
+        val pkgs = needed.mapNotNull { pkgFor(it) }.distinct()
+        if (pkgs.isEmpty()) {
+            return false to "no known package mapping for ${needed.joinToString(" ")} on $family"
+        }
+        val ops = PackageOps.forFamily(family)
+        val (installOut, _) = runCommandInProot("${ops.updateCmd()} && ${ops.installCmd(pkgs)}")
+        val (recheck, _) = runCommandInProot(probeCmd)
+        return if (recheck.contains("HAVE")) {
+            true to "installed ${pkgs.joinToString(" ")}"
+        } else {
+            false to "render-tool install failed (need ${needed.joinToString(" ")}): ${installOut.takeLast(600)}"
+        }
+    }
+
+    /**
      * Run `update && install` inside the proot, and if the install
      * fails with the family's stale-package-DB signature, run a
      * full system upgrade once and retry the install. Self-repair

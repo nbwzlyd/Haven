@@ -1249,6 +1249,33 @@ internal class McpTools(
             },
         ) { args -> captureDesktop(args) },
 
+        "view_file" to ToolHandler(
+            description = "Render a file from the ACTIVE proot guest to an INLINE image the agent can see directly — no desktop, X server, VNC client, or GPU needed (fully headless / GL-free). Handles .kicad_sch and .kicad_pcb (via kicad-cli), .pdf (first page, or `page`), .svg, and raster images (png/jpg/jpeg/webp/bmp/gif). The result is downscaled to maxWidth and returned as an image content block, so it works even when no VNC desktop is running. Prefer this over capture_desktop for looking at design output (schematics, PCBs, PDFs, plots).",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("path", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Absolute path to the file inside the active proot guest (e.g. /root/proj/board.kicad_sch).")
+                    })
+                    put("maxWidth", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Downscale so the image is at most this many pixels wide. Default 1024 (clamped 160–4096).")
+                    })
+                    put("format", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "\"png\" (default, lossless) or \"jpeg\" (smaller over the tunnel).")
+                    })
+                    put("page", JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For multi-page PDFs, the 1-based page to render. Default 1.")
+                    })
+                })
+                put("required", JSONArray().put("path"))
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> viewFile(args) },
+
         "get_proot_install_log" to ToolHandler(
             description = "Return install-log events from the Room-backed ProotInstallLog table. Survives logcat rotation and app restarts. Filter by distroId and/or sinceMs (millis since epoch) to poll incrementally. Each event: id, timestamp, distroId, phase, deId?, exit?, ok, message?, logTail?.",
             inputSchema = JSONObject().apply {
@@ -5194,6 +5221,111 @@ internal class McpTools(
             bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
         }
         return Triple(Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), bmp.width, bmp.height)
+    }
+
+    /**
+     * Render a guest file to an inline image the agent can see, fully
+     * headless (no X / no GL). The render runs inside the proot writing a PNG
+     * to `/tmp` (bound to the app cacheDir), which we read back off the app's
+     * filesystem and re-encode via [encodeCapture] — the same image-content
+     * path as [captureDesktop], so `McpServer` lifts `__imageBase64` into an
+     * MCP image block. This is the reliable "show me the design" loop that
+     * doesn't depend on a running VNC desktop.
+     */
+    private suspend fun viewFile(args: JSONObject): JSONObject {
+        val path = args.optString("path").takeIf { it.isNotBlank() }
+            ?: throw McpError(-32602, "path is required (absolute guest path)")
+        if (!path.startsWith("/")) throw McpError(-32602, "path must be an absolute guest path")
+        val maxWidth = args.optInt("maxWidth", 1024).coerceIn(160, 4096)
+        val format = if (args.optString("format", "png").lowercase() == "jpeg") "jpeg" else "png"
+        val page = args.optInt("page", 1).coerceAtLeast(1)
+        if (!prootManager.isRootfsInstalled) {
+            throw McpError(-32603, "Active distro '${prootManager.activeDistroId}' has no installed rootfs")
+        }
+
+        val ext = path.substringAfterLast('.', "").lowercase()
+        val base = path.substringAfterLast('/').substringBeforeLast('.')
+        val outName = "haven-view-${System.currentTimeMillis()}.png" // guest /tmp == app cacheDir
+        val outGuest = "/tmp/$outName"
+        val q = "'" + path.replace("'", "'\\''") + "'" // shell-quote the source path
+
+        // Build the render pipeline + the binaries it needs. `\$` escapes keep
+        // shell variables/substitutions literal; `$outGuest`/`$maxWidth`/etc.
+        // are Kotlin interpolations baked in here.
+        val needed: List<String>
+        val renderCmd: String
+        when (ext) {
+            "png", "jpg", "jpeg", "webp", "bmp", "gif" -> {
+                needed = emptyList()
+                renderCmd = "cp $q $outGuest"
+            }
+            "svg" -> {
+                needed = listOf("rsvg-convert")
+                renderCmd = "rsvg-convert -w $maxWidth $q -o $outGuest"
+            }
+            "pdf" -> {
+                needed = listOf("pdftoppm")
+                // -singlefile drops pdftoppm's "-NN" page suffix so it lands on $outGuest.
+                renderCmd = "pdftoppm -png -r 150 -f $page -l $page -singlefile $q ${outGuest.removeSuffix(".png")}"
+            }
+            "kicad_sch" -> {
+                needed = listOf("rsvg-convert")
+                renderCmd = "d=\$(mktemp -d) && kicad-cli sch export svg -o \$d $q && " +
+                    "rsvg-convert -w $maxWidth \"\$d/$base.svg\" -o $outGuest"
+            }
+            "kicad_pcb" -> {
+                needed = listOf("rsvg-convert")
+                renderCmd = "d=\$(mktemp -d) && kicad-cli pcb export svg -o \$d/pcb.svg $q && " +
+                    "rsvg-convert -w $maxWidth \$d/pcb.svg -o $outGuest"
+            }
+            else -> throw McpError(
+                -32602,
+                "Unsupported file type '.$ext' — view_file handles kicad_sch, kicad_pcb, pdf, svg, png, jpg, jpeg, webp, bmp, gif",
+            )
+        }
+
+        if (needed.isNotEmpty()) {
+            val (ready, detail) = prootManager.ensureRenderTools(needed)
+            if (!ready) throw McpError(-32603, "Render tools unavailable: $detail")
+        }
+        if (ext == "kicad_sch" || ext == "kicad_pcb") {
+            // kicad-cli is heavy; never auto-install — surface a clear error if absent.
+            val (probe, _) = prootManager.runCommandInProot(
+                "command -v kicad-cli >/dev/null 2>&1 && echo HAVE || echo MISSING",
+            )
+            if (!probe.contains("HAVE")) {
+                throw McpError(-32603, "kicad-cli not found in the guest — install KiCad to render .$ext files")
+            }
+        }
+
+        val script = "rm -f $outGuest; { $renderCmd ; } > $outGuest.log 2>&1; echo EXIT:\$?"
+        val (out, _) = prootManager.runCommandInProot(script)
+
+        val outFile = File(context.cacheDir, outName)
+        val logFile = File(context.cacheDir, "$outName.log")
+        try {
+            if (!outFile.exists() || outFile.length() == 0L) {
+                val log = if (logFile.exists()) logFile.readText() else ""
+                throw McpError(-32603, "Render produced no image for $path (${log.take(500).trim()}; $out)")
+            }
+            val bytes = outFile.readBytes()
+            val (b64, w, h) = withContext(Dispatchers.Default) {
+                encodeCapture(bytes, null, maxWidth, format)
+            }
+            return JSONObject().apply {
+                put("path", path)
+                put("rendered", "$ext → $format")
+                put("width", w)
+                put("height", h)
+                put("format", format)
+                // Reserved keys: McpServer lifts these into an MCP image content block.
+                put("__imageBase64", b64)
+                put("__mimeType", if (format == "jpeg") "image/jpeg" else "image/png")
+            }
+        } finally {
+            outFile.delete()
+            logFile.delete()
+        }
     }
 
     private suspend fun runInProot(args: JSONObject): JSONObject {
