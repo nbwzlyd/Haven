@@ -14,8 +14,8 @@ android {
         applicationId = "sh.haven.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 434
-        versionName = "5.48.2"
+        versionCode = 435
+        versionName = "5.49.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -122,6 +122,7 @@ dependencies {
     implementation(project(":core:rclone"))
     implementation(project(":core:ffmpeg"))
     implementation(project(":core:fido"))
+    implementation(project(":core:usb"))
     implementation(project(":core:local"))
     implementation(project(":core:wayland"))
     implementation(project(":core:terminal-haven"))

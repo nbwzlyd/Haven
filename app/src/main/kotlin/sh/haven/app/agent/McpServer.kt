@@ -144,6 +144,7 @@ class McpServer @Inject constructor(
     private val sshKeyRepository: sh.haven.core.data.repository.SshKeyRepository,
     private val totpSecretRepository: sh.haven.core.data.repository.TotpSecretRepository,
     private val desktopSessionRegistry: sh.haven.core.data.desktop.DesktopSessionRegistry,
+    private val usbBroker: sh.haven.core.usb.UsbBroker,
 ) : Closeable {
 
     /**
@@ -269,6 +270,7 @@ class McpServer @Inject constructor(
         sshKeyRepository = sshKeyRepository,
         totpSecretRepository = totpSecretRepository,
         desktopSessionRegistry = desktopSessionRegistry,
+        usbBroker = usbBroker,
         mcpPortProvider = { port },
     )
 

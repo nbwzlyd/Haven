@@ -83,6 +83,7 @@ internal class McpTools(
     private val sshKeyRepository: sh.haven.core.data.repository.SshKeyRepository,
     private val totpSecretRepository: sh.haven.core.data.repository.TotpSecretRepository,
     private val desktopSessionRegistry: sh.haven.core.data.desktop.DesktopSessionRegistry,
+    private val usbBroker: sh.haven.core.usb.UsbBroker,
     /**
      * The MCP HTTP server's live bound port. Evaluated lazily so the
      * reverse-tunnel auto-detect follows an 8731+ fallback instead of a
@@ -997,6 +998,71 @@ internal class McpTools(
             consentLevel = ConsentLevel.EVERY_CALL,
             summarise = { _ -> "Enable Wireless debugging on this device?" },
         ) { _ -> enableWirelessAdb() },
+
+        // --- USB broker (Layer-B: re-expose the phone's USB devices) ---
+        // The phone is the only thing that can open a USB device on a
+        // non-rooted Android (the proot guest and adb shell are both denied
+        // /dev/bus/usb). These tools let the agent enumerate and drive USB
+        // directly; later slices bridge the same transfers into the guest.
+
+        "list_usb_devices" to ToolHandler(
+            description = "List USB devices attached to the phone (host/OTG). Each entry has deviceName (the stable /dev/bus/usb path used as the key for the other usb_* tools), vidPid, deviceClass, hasPermission, isOpen, and the interface/endpoint descriptors (id, class, endpoint address + direction + type). Manufacturer/product/serial strings are only filled once permission is held (call request_usb_permission). Read-only; never prompts.",
+            inputSchema = emptyObjectSchema(),
+            consentLevel = ConsentLevel.NEVER,
+        ) { _ -> listUsbDevices() },
+
+        "request_usb_permission" to ToolHandler(
+            description = "Request the Android runtime USB permission for a device (pops the system grant dialog) and open it, caching the connection for usb_control_transfer / usb_bulk_transfer. Idempotent: a no-op if permission is already held and the device is open. Returns the device info with hasPermission/isOpen reflecting the result.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deviceName", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "deviceName from list_usb_devices (the /dev/bus/usb/BBB/DDD path).")
+                    })
+                })
+                put("required", JSONArray().put("deviceName"))
+            },
+            consentLevel = ConsentLevel.ONCE_PER_SESSION,
+            summarise = { args -> "Grant the agent access to USB device ${usbLabel(args.optString("deviceName"))}?" },
+        ) { args -> requestUsbPermission(args) },
+
+        "usb_control_transfer" to ToolHandler(
+            description = "Perform a USB endpoint-0 control transfer on an opened device. Args: deviceName, requestType (bmRequestType, int — bit 7 set = device-to-host/IN), request (bRequest), value (wValue), index (wIndex), dataBase64 (OUT payload, omit for IN), length (IN read length), timeoutMs (default 1000). Returns bytesTransferred and, for IN transfers, dataBase64. The device must already be opened via request_usb_permission.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deviceName", JSONObject().apply { put("type", "string") })
+                    put("requestType", JSONObject().apply { put("type", "integer"); put("description", "bmRequestType. Bit 7 (0x80) set = IN.") })
+                    put("request", JSONObject().apply { put("type", "integer"); put("description", "bRequest.") })
+                    put("value", JSONObject().apply { put("type", "integer"); put("description", "wValue.") })
+                    put("index", JSONObject().apply { put("type", "integer"); put("description", "wIndex.") })
+                    put("dataBase64", JSONObject().apply { put("type", "string"); put("description", "Base64 OUT payload; omit for IN.") })
+                    put("length", JSONObject().apply { put("type", "integer"); put("description", "IN read length; ignored for OUT.") })
+                    put("timeoutMs", JSONObject().apply { put("type", "integer") })
+                })
+                put("required", JSONArray().put("deviceName").put("requestType").put("request").put("value").put("index"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args -> "USB control transfer to ${usbLabel(args.optString("deviceName"))}" },
+        ) { args -> usbControlTransfer(args) },
+
+        "usb_bulk_transfer" to ToolHandler(
+            description = "Perform a USB bulk or interrupt transfer on an opened device. Direction is taken from the endpoint descriptor. Args: deviceName, endpoint (bEndpointAddress, int), dataBase64 (OUT payload, omit for IN), length (IN read length), timeoutMs (default 1000). The owning interface is claimed automatically. Returns bytesTransferred and, for IN endpoints, dataBase64.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deviceName", JSONObject().apply { put("type", "string") })
+                    put("endpoint", JSONObject().apply { put("type", "integer"); put("description", "bEndpointAddress from the interface descriptor.") })
+                    put("dataBase64", JSONObject().apply { put("type", "string"); put("description", "Base64 OUT payload; omit for IN endpoints.") })
+                    put("length", JSONObject().apply { put("type", "integer"); put("description", "IN read length; ignored for OUT.") })
+                    put("timeoutMs", JSONObject().apply { put("type", "integer") })
+                })
+                put("required", JSONArray().put("deviceName").put("endpoint"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args -> "USB bulk transfer to ${usbLabel(args.optString("deviceName"))}" },
+        ) { args -> usbBulkTransfer(args) },
 
         "open_local_shell" to ToolHandler(
             description = "Open a fresh local Alpine PRoot shell session and return its sessionId. Equivalent to tapping the Terminal icon in the Connections top bar — creates the local shell profile if missing, registers a session, and connects it. The returned sessionId is immediately usable with send_terminal_input and read_terminal_scrollback. Use this when you need a clean bash REPL (e.g. when an existing session has Claude Code, vim, or another stdin-capturing process in front of it). Pass `plain: true` to bypass the user's session-manager preference (tmux / zellij / screen / byobu) and exec a bare login shell — required when the agent needs Haven's own scrollback ring to capture output, which doesn't happen when a multiplexer's status bar uses DECSTBM to reserve the bottom row. NOTE: if a live local shell already exists, this returns that sessionId regardless of `plain` (response `reused: true`); call disconnect_profile on the existing profile first if you need a fresh plain-shell respawn.",
@@ -3922,6 +3988,117 @@ internal class McpTools(
                 if (port != null) "If the host has paired before, run: adb connect ${ip ?: "<phone-ip>"}:$port"
                 else "Open Settings → Developer Options → Wireless debugging on the device to read the pairing port if you need to pair a new host.",
             )
+        }
+    }
+
+    // ---- USB broker tools (Slice 1) --------------------------------------
+
+    /** Short device label for consent prompts: "Evolv DNA 100C (9999:0001)" or just the vid:pid. */
+    private fun usbLabel(deviceName: String): String =
+        runCatching {
+            usbBroker.listDevices().firstOrNull { it.deviceName == deviceName }?.let { d ->
+                val name = d.productName ?: d.manufacturerName
+                if (name != null) "$name (${d.vidPid})" else d.vidPid
+            }
+        }.getOrNull() ?: deviceName
+
+    private fun usbDeviceJson(d: sh.haven.core.usb.UsbDeviceInfo): JSONObject = JSONObject().apply {
+        put("deviceName", d.deviceName)
+        put("vidPid", d.vidPid)
+        put("vendorId", d.vendorId)
+        put("productId", d.productId)
+        put("deviceClass", d.deviceClass)
+        put("manufacturerName", d.manufacturerName ?: JSONObject.NULL)
+        put("productName", d.productName ?: JSONObject.NULL)
+        put("serialNumber", d.serialNumber ?: JSONObject.NULL)
+        put("hasPermission", d.hasPermission)
+        put("isOpen", d.isOpen)
+        put("interfaces", JSONArray().apply {
+            d.interfaces.forEach { iface ->
+                put(JSONObject().apply {
+                    put("id", iface.id)
+                    put("interfaceClass", iface.interfaceClass)
+                    put("interfaceSubclass", iface.interfaceSubclass)
+                    put("interfaceProtocol", iface.interfaceProtocol)
+                    put("endpoints", JSONArray().apply {
+                        iface.endpoints.forEach { ep ->
+                            put(JSONObject().apply {
+                                put("address", ep.address)
+                                put("direction", ep.direction)
+                                put("type", ep.type)
+                                put("maxPacketSize", ep.maxPacketSize)
+                            })
+                        }
+                    })
+                })
+            }
+        })
+    }
+
+    private suspend fun listUsbDevices(): JSONObject = withContext(Dispatchers.IO) {
+        val devices = usbBroker.listDevices()
+        JSONObject().apply {
+            put("count", devices.size)
+            put("devices", JSONArray().apply { devices.forEach { put(usbDeviceJson(it)) } })
+        }
+    }
+
+    private suspend fun requestUsbPermission(args: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val deviceName = args.optString("deviceName").ifBlank {
+            throw McpError(-32602, "deviceName is required (from list_usb_devices)")
+        }
+        val info = try {
+            usbBroker.openDevice(deviceName)
+        } catch (e: Exception) {
+            throw McpError(-32603, "USB open failed: ${e.message}")
+        }
+        usbDeviceJson(info)
+    }
+
+    private suspend fun usbControlTransfer(args: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val deviceName = args.optString("deviceName").ifBlank {
+            throw McpError(-32602, "deviceName is required")
+        }
+        val requestType = args.getInt("requestType")
+        val request = args.getInt("request")
+        val value = args.getInt("value")
+        val index = args.getInt("index")
+        val timeoutMs = args.optInt("timeoutMs", 1000)
+        val out = args.optString("dataBase64").takeIf { it.isNotBlank() }
+            ?.let { Base64.decode(it, Base64.DEFAULT) }
+        val length = args.optInt("length", out?.size ?: 0)
+        val result = try {
+            usbBroker.controlTransfer(deviceName, requestType, request, value, index, out, length, timeoutMs)
+        } catch (e: Exception) {
+            throw McpError(-32603, "controlTransfer failed: ${e.message}")
+        }
+        JSONObject().apply {
+            put("bytesTransferred", result.bytesTransferred)
+            if (result.data.isNotEmpty()) {
+                put("dataBase64", Base64.encodeToString(result.data, Base64.NO_WRAP))
+            }
+        }
+    }
+
+    private suspend fun usbBulkTransfer(args: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val deviceName = args.optString("deviceName").ifBlank {
+            throw McpError(-32602, "deviceName is required")
+        }
+        val endpoint = args.getInt("endpoint")
+        val timeoutMs = args.optInt("timeoutMs", 1000)
+        val out = args.optString("dataBase64").takeIf { it.isNotBlank() }
+            ?.let { Base64.decode(it, Base64.DEFAULT) }
+        val length = args.optInt("length", out?.size ?: 0)
+        val result = try {
+            usbBroker.bulkTransfer(deviceName, endpoint, out, length, timeoutMs)
+        } catch (e: Exception) {
+            throw McpError(-32603, "bulkTransfer failed: ${e.message}")
+        }
+        JSONObject().apply {
+            put("bytesTransferred", result.bytesTransferred)
+            if (result.data.isNotEmpty()) {
+                put("dataBase64", Base64.encodeToString(result.data, Base64.NO_WRAP))
+            }
         }
     }
 

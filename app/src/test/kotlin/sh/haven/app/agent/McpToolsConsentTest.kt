@@ -78,6 +78,7 @@ class McpToolsConsentTest {
             sshKeyRepository = mockk<sh.haven.core.data.repository.SshKeyRepository>(relaxed = true),
             totpSecretRepository = mockk<sh.haven.core.data.repository.TotpSecretRepository>(relaxed = true),
             desktopSessionRegistry = mockk<sh.haven.core.data.desktop.DesktopSessionRegistry>(relaxed = true),
+            usbBroker = mockk<sh.haven.core.usb.UsbBroker>(relaxed = true),
         )
     }
 
@@ -106,6 +107,9 @@ class McpToolsConsentTest {
             // Listing the user's saved workspaces is read-only and
             // surfaces no secrets — no consent.
             "list_workspaces",
+            // Enumerating attached USB devices is read-only; descriptor
+            // strings stay hidden until permission is separately granted.
+            "list_usb_devices",
         )) {
             val c = tools.consentFor(name)
                 ?: error("$name not registered")
@@ -129,6 +133,10 @@ class McpToolsConsentTest {
             // batch. Shipped behaviour since the queue_terminal_input split;
             // this assertion was masked while the suite didn't compile.
             "send_terminal_input",
+            // request_usb_permission pops the system grant dialog + opens
+            // the device; gate once per (client, tool) so the agent isn't
+            // re-prompted each time it reopens the same device.
+            "request_usb_permission",
         )) {
             val c = tools.consentFor(name)
                 ?: error("$name not registered")
@@ -155,6 +163,9 @@ class McpToolsConsentTest {
             "set_terminal_font_from_url",
             "install_apk_from_url",
             "enable_wireless_adb",
+            // Raw USB I/O to a device — re-confirm every transfer.
+            "usb_control_transfer",
+            "usb_bulk_transfer",
         )) {
             val c = tools.consentFor(name)
                 ?: error("$name not registered")

@@ -126,6 +126,7 @@ class McpDragSelectionTest {
             sshKeyRepository = mockk<sh.haven.core.data.repository.SshKeyRepository>(relaxed = true),
             totpSecretRepository = mockk<sh.haven.core.data.repository.TotpSecretRepository>(relaxed = true),
             desktopSessionRegistry = mockk<sh.haven.core.data.desktop.DesktopSessionRegistry>(relaxed = true),
+            usbBroker = mockk<sh.haven.core.usb.UsbBroker>(relaxed = true),
         )
     }
 

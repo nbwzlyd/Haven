@@ -47,6 +47,16 @@ The **gateway** is how runtimes talk to each other and to the outside world. Hav
 
 You should be able to reach any service from any runtime with one configuration step, and the connection should survive network transitions without your workflow fraying.
 
+## The host as a privileged peer — brokering the phone's own capabilities
+
+The three primitives reach *outward* — to other machines' files, shells, and networks. But the device in your hand is itself a computer, and it holds capabilities the runtime can't reach on its own: the USB device on the OTG port, the camera, location, sensors, the clipboard, notifications, biometric hardware. On Android these sit behind the framework's permission model and SELinux; a process inside the PRoot runtime — and therefore an agent running in it — cannot open them directly. A Linux program that expects raw `/dev` nodes and udev just hits a wall.
+
+The resolution is a pattern, not a one-off workaround: **when a runtime or an agent is blocked on a host capability, Haven brokers it.** Haven is the one component that is a real Android app, with framework access and a path to user consent. It opens the capability the Android way, gates it behind an explicit prompt, and re-exposes it as a primitive the runtime and the agent use through the same tool-use surface as everything else — humans tap, agents call, both observe. The phone OS is therefore not only a *delegation target* (hand a file to a media player, raise a biometric prompt) but a *source of brokered capabilities* the distributed workflow composes with.
+
+Concretely: a USB device opened via the platform's USB API and surfaced either as a device-specific tool set or as a file descriptor bridged into the runtime; the camera, sensors, location, or clipboard exposed the same way. The boundary stays sharp — Haven brokers *access* to the device, it does not become the device's app or reimplement a vendor's tool. And it stays honest about the floor: capabilities the platform only grants with root (raw bus access, udev, kernel modules) are a power-user, root-gated path, never the default. The non-root broker is the common case, because the point is to work on the phone the user actually has.
+
+This is the build-vs-delegate discipline pointed inward: build the broker where the runtime needs a capability the platform won't hand to a non-app process; delegate where a clean handoff already exists. Together with the three outward primitives, it is what makes Haven a *home* for an agent on the device as well as a *bridge* to everything beyond it.
+
 ## Presentation — build where composition matters, delegate where it doesn't
 
 Every primitive needs a touchable surface, and the decision of whether Haven builds that surface or hands off to the host OS is not aesthetic — it's structural. The rule:
@@ -249,7 +259,7 @@ Think of Haven as three layers, each of which must remain small and sharp:
 
 3. **Identity and trust** (keystore, screen lock, TOFU, secrets hygiene). This is the cross-cutting layer that earns users' confidence in putting their credentials on the phone in the first place. Every feature must pay its security rent.
 
-Outside those three layers is the Android host, which provides media playback, PDF/image viewing, notifications, share sheet, biometric prompts, and web rendering. Haven explicitly delegates to it for anything covered by the build-vs-delegate rule above. The phone OS is a free lower layer we don't need to rebuild.
+Outside those three layers is the Android host, which provides media playback, PDF/image viewing, notifications, share sheet, biometric prompts, and web rendering. Haven explicitly delegates to it for anything covered by the build-vs-delegate rule above. The phone OS is a free lower layer we don't need to rebuild — and, per "The host as a privileged peer," a layer Haven also *brokers into* the runtime: platform-gated capabilities (USB, camera, sensors, location, clipboard) opened with consent and re-exposed as primitives, rather than escalating the guest's privilege.
 
 A public library succeeds not by having every book, but by having the right books, organized well, in a building that's pleasant to be in. Haven's books — protocols, backends, codecs — are sufficient. The work now is in the organisation (composition surfaces, workspace profiles, cross-tab actions) and the building (touch interface polish, gesture reliability, battery-friendliness).
 
