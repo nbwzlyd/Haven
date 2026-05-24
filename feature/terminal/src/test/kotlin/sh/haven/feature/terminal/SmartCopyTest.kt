@@ -170,6 +170,47 @@ class SmartCopyTest {
         assertEquals("left\nline2\nline3", out)
     }
 
+    @Test
+    fun `smartCopy reconstructs a hanging-indent wrapped URL without newline or indent`() {
+        // Selection spans the URL row and the indented tail row. The rows are
+        // hard-broken (not softWrapped), so getSelectedText would return them
+        // with a "\n" + indent. smartCopy rejoins into the clean URL instead.
+        val out = smartCopy(
+            controller(
+                SelectionRange(startRow = 0, startCol = 0, endRow = 1, endCol = 5),
+                selectedText = "https://github.com/GlassOnTin/iSpindlePlotter.gi\n     t",
+            ),
+            emulator(
+                listOf(
+                    "https://github.com/GlassOnTin/iSpindlePlotter.gi",
+                    "     t",
+                ),
+                columns = 61,
+            ),
+        )
+        assertEquals("https://github.com/GlassOnTin/iSpindlePlotter.git", out)
+    }
+
+    @Test
+    fun `smartCopy keeps multi-row prose verbatim`() {
+        // A real multi-row prose selection does not rejoin into a single URL,
+        // so smartCopy preserves the controller's newline-bearing text.
+        val out = smartCopy(
+            controller(
+                SelectionRange(startRow = 0, startCol = 0, endRow = 1, endCol = 13),
+                selectedText = "see https://example.com\nand more notes",
+            ),
+            emulator(
+                listOf(
+                    "see https://example.com",
+                    "  and more notes",
+                ),
+                columns = 40,
+            ),
+        )
+        assertEquals("see https://example.com\nand more notes", out)
+    }
+
     // ---------- SmartTerminalClipboard.setText ----------
 
     private fun clipboard(
@@ -314,8 +355,10 @@ class SmartCopyTest {
     }
 
     @Test
-    fun `URL wrap stops when continuation row starts with whitespace`() {
-        // The next row is indented prose — not a URL continuation.
+    fun `URL wrap stops on multi-word indented prose`() {
+        // The next row is indented prose with multiple words — a line full of
+        // text, not a hanging-indent wrap tail. Must not join (guards the
+        // common false-positive).
         val span = expandAcrossUrlWrap(
             lines = listOf(
                 "https://example.com/some/pa",
@@ -324,6 +367,65 @@ class SmartCopyTest {
             row = 0,
             wordStartCol = 0,
             wordEndCol = 26,
+            columns = 40,
+        )
+        assertNull(span)
+    }
+
+    @Test
+    fun `URL wrap joins a hanging-indent single-char tail`() {
+        // The exact iSpindle case: Claude Code wrapped the final 't' of
+        // '.git' onto the next line behind a 5-space hanging indent. The
+        // continuation is a single short run on an otherwise-blank line.
+        val span = expandAcrossUrlWrap(
+            lines = listOf(
+                "https://github.com/GlassOnTin/iSpindlePlotter.gi",
+                "     t",
+            ),
+            row = 0,
+            wordStartCol = 0,
+            wordEndCol = 47, // '.gi' ends at the row's trimmed edge
+            columns = 61,
+        )
+        assertNotNull(span)
+        assertEquals(0, span!!.startRow)
+        assertEquals(0, span.startCol)
+        assertEquals(1, span.endRow)
+        assertEquals(5, span.endCol) // the 't' at col 5
+    }
+
+    @Test
+    fun `URL wrap joins a hanging-indent multi-char tail`() {
+        // Not just single characters: a short indented run like '/issues'
+        // left alone on its line is a wrap tail too.
+        val span = expandAcrossUrlWrap(
+            lines = listOf(
+                "https://github.com/GlassOnTin/Haven",
+                "   /issues",
+            ),
+            row = 0,
+            wordStartCol = 0,
+            wordEndCol = 34,
+            columns = 40,
+        )
+        assertNotNull(span)
+        assertEquals(1, span!!.endRow)
+        assertEquals(9, span.endCol) // '/issues' ends at col 9
+    }
+
+    @Test
+    fun `URL wrap does not join an indented run that fills the line`() {
+        // A long indented run is not the mostly-blank shape of a wrap tail —
+        // more likely a reflowed paragraph. Don't join.
+        val span = expandAcrossUrlWrap(
+            lines = listOf(
+                "https://example.com/aaaaaaaaaaaaaaaaaaaa",
+                "   bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+            row = 0,
+            wordStartCol = 0,
+            wordEndCol = 39,
+            columns = 40,
         )
         assertNull(span)
     }

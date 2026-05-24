@@ -96,7 +96,8 @@ internal fun expandSelectionToWord(
 
         // Try to extend across URL wrap boundaries when the token reaches a
         // row edge and joins into a URL-looking string on neighbouring rows.
-        val urlRange = expandAcrossUrlWrap(lines, row, startCol, endCol)
+        val columns = try { emulator.dimensions.columns } catch (_: Exception) { 0 }
+        val urlRange = expandAcrossUrlWrap(lines, row, startCol, endCol, columns)
         if (urlRange != null) {
             controller.updateSelectionStart(urlRange.startRow, urlRange.startCol)
             controller.updateSelectionEnd(urlRange.endRow, urlRange.endCol)
@@ -137,6 +138,7 @@ internal fun expandAcrossUrlWrap(
     row: Int,
     wordStartCol: Int,
     wordEndCol: Int,
+    columns: Int = 0,
 ): UrlSpan? {
     val currentText = lines[row]
     val trimmedLen = currentText.trimTerminalPadding().length
@@ -146,9 +148,12 @@ internal fun expandAcrossUrlWrap(
     var endRow = row
     var endCol = wordEndCol
 
-    // Walk backward into previous rows while the word we're tracking sits at
-    // column 0 and the previous row's last non-padding character is URL-safe.
-    while (startCol == 0 && startRow > 0) {
+    // Walk backward into previous rows while the word we're tracking is the
+    // first non-whitespace run on its row (column-0 soft-wrap, or a
+    // hanging-indent continuation) and the previous row's last non-padding
+    // character is URL-safe.
+    while (startRow > 0) {
+        if (lines[startRow].indexOfFirst { !it.isWhitespace() } != startCol) break
         val prev = lines[startRow - 1].trimTerminalPadding()
         if (prev.isEmpty() || !prev.last().isUrlSafe()) break
         // Find where the URL-safe run starts on `prev` (last whitespace
@@ -159,16 +164,29 @@ internal fun expandAcrossUrlWrap(
         startCol = s
     }
 
-    // Walk forward into next rows while we're at this row's trimmed edge
-    // and the next row begins with a URL-safe character at column 0.
+    // Walk forward into next rows while we're at this row's trimmed edge and
+    // the next row contributes a URL-safe run. A column-0 run is a classic
+    // soft-wrap. An *indented* run is only treated as a wrap tail when it's a
+    // single short run on an otherwise-blank line — the shape of a
+    // hanging-indent wrap, as opposed to indented prose (a line full of
+    // words) or a table cell (owned by the border/panel path).
     while (endCol >= trimmedLen - 1 && endRow < lines.size - 1) {
         val next = lines[endRow + 1]
-        if (next.isEmpty() || !next[0].isUrlSafe() || next[0].isWhitespace()) break
+        val t0 = next.indexOfFirst { !it.isWhitespace() }
+        if (t0 < 0 || !next[t0].isUrlSafe()) break
         // Find where the URL-safe run ends on `next`.
-        var e = 0
+        var e = t0
         while (e < next.length && !next[e].isWhitespace() && next[e].isUrlSafe()) e++
+        if (t0 > 0) {
+            val afterRun = next.substring(e)
+            val runLen = e - t0
+            val width = if (columns > 0) columns else next.length
+            // More content after the run (prose), or a run that fills much of
+            // the line, means this isn't a hanging-indent wrap tail.
+            if (afterRun.isNotBlank() || runLen > (width / 2).coerceAtLeast(1)) break
+        }
         endRow += 1
-        endCol = (e - 1).coerceAtLeast(0)
+        endCol = (e - 1).coerceAtLeast(t0)
     }
 
     // No continuation found → fall back to single-row word.
@@ -177,11 +195,12 @@ internal fun expandAcrossUrlWrap(
     // Verify the joined text actually looks like a URL before using the
     // expanded bounds. "iss" + "ues/89" can form a URL continuation, but we
     // only want to override the word walk when the result is definitely a
-    // URL and not just adjacent prose.
+    // URL and not just adjacent prose. Continuation rows contribute from
+    // their first non-whitespace column so a hanging indent never leaks in.
     val joined = buildString {
         for (r in startRow..endRow) {
             val line = lines[r]
-            val from = if (r == startRow) startCol else 0
+            val from = if (r == startRow) startCol else line.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
             val toExclusive = if (r == endRow) {
                 (endCol + 1).coerceAtMost(line.length)
             } else {
@@ -190,7 +209,7 @@ internal fun expandAcrossUrlWrap(
             if (from < toExclusive) append(line.substring(from, toExclusive))
         }
     }
-    if (!joined.contains("://") && !joined.contains("www.")) return null
+    if (!looksLikeFullUrl(joined)) return null
 
     return UrlSpan(startRow, startCol, endRow, endCol)
 }
@@ -206,6 +225,47 @@ private fun String.trimTerminalPadding(): String =
  */
 private fun Char.isUrlSafe(): Boolean =
     isLetterOrDigit() || this in "/:@!$&'()*+,;=-._~%?#[]"
+
+/**
+ * Whether a whitespace-free string looks like a *complete* URL token (scheme- or
+ * `www.`-prefixed, a dotted host, optional path/query). Pure Kotlin on purpose —
+ * `android.util.Patterns.WEB_URL`'s class initializer isn't available in plain
+ * JVM unit tests, and the wrap-join logic must stay offline-testable. This is a
+ * sanity gate on the joined result, not the primary discriminator (that's the
+ * single-run / mostly-blank-line shape test in [expandAcrossUrlWrap]).
+ */
+private val URL_TOKEN_RE = Regex(
+    "^(?:https?://|www\\.)[\\w-]+(?:\\.[\\w-]+)+(?:[/:?#@!\$&'()*+,;=._~%\\[\\]-]\\S*)?$",
+    RegexOption.IGNORE_CASE,
+)
+
+internal fun looksLikeFullUrl(s: String): Boolean = URL_TOKEN_RE.matches(s)
+
+/**
+ * Reconstruct a URL from a multi-row selection by stripping each row's
+ * leading/trailing whitespace (the terminal padding and any hanging indent)
+ * and joining without newlines. Returns the rebuilt URL only when it forms a
+ * single complete URL token — otherwise null so the caller keeps the
+ * controller's verbatim (newline-preserving) text. Mirrors the "Open URL"
+ * button's existing `\s*\n\s*`-strip, applied to the Copy path.
+ */
+private fun rebuildWrappedUrl(
+    lines: List<String>,
+    startRow: Int,
+    startCol: Int,
+    endRow: Int,
+    endCol: Int,
+): String? {
+    val sb = StringBuilder()
+    for (r in startRow..endRow) {
+        val line = lines.getOrNull(r) ?: return null
+        val from = if (r == startRow) startCol.coerceIn(0, line.length) else 0
+        val to = if (r == endRow) (endCol + 1).coerceIn(0, line.length) else line.length
+        if (from < to) sb.append(line.substring(from, to).trim())
+    }
+    val joined = sb.toString()
+    return if (looksLikeFullUrl(joined)) joined else null
+}
 
 /**
  * Plain-text lines of the terminal's current snapshot. Returns null on
@@ -311,6 +371,17 @@ internal fun smartCopy(
         // bounded by vertical box-drawing characters, so we keep one line
         // per row regardless of wrap state.
         return extractPanelContent(fullTexts, borderCols, sel.startCol)
+    }
+
+    // Non-border path. When the selection spans multiple hard-broken rows that
+    // rejoin (indent + newline stripped) into a single complete URL — the
+    // shape of an app-wrapped URL like Claude Code's hanging indent —
+    // reconstruct it. getSelectedText would otherwise keep the newline and
+    // indent because the rows aren't softWrapped. Falls through to the
+    // controller's verbatim text when it isn't a clean URL.
+    if (sel.endRow > sel.startRow) {
+        rebuildWrappedUrl(snapshotLines, sel.startRow, sel.startCol, sel.endRow, sel.endCol)
+            ?.let { return it }
     }
 
     return controller.getSelectedText().ifEmpty { null }
