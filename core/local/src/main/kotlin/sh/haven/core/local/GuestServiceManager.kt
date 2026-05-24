@@ -201,11 +201,20 @@ class GuestServiceManager @Inject constructor(
     }
 
     /**
-     * Stop a running service. Sends SIGTERM first ([Process.destroy]) so proot forwards it to
-     * the (exec'd) root tracee and reaps the child tree via `--kill-on-exit`; `destroyForcibly()`
-     * (SIGKILL) is only a last resort. A bare SIGKILL to proot can't be caught, so its child
-     * reaping never runs — the guest process orphans, keeps holding the port, and serves stale
-     * code after a restart.
+     * Stop a running service.
+     *
+     * Signalling the proot *launcher* (the tracked [Process]) is not enough: proot ptrace-traces
+     * the guest tracee and does **not** propagate our SIGTERM/SIGKILL to it, and `--kill-on-exit`
+     * only reaps when proot exits because its *tracee* exited — not when proot itself is killed.
+     * Device-verified 2026-05-24: a bare `destroy()`/`destroyForcibly()` leaves the guest python
+     * orphaned (reparented to init), still holding its listening port, so a restart fails to bind
+     * (`[Errno 98] address already in use`). `/proc/net/tcp` is permission-denied inside proot, so
+     * kill-by-port is impossible from the guest.
+     *
+     * So we reap the tree ourselves, app-side: capture the launcher's descendant PIDs from
+     * `/proc/<pid>/stat` *while the tree is intact*, signal the launcher, then SIGTERM→SIGKILL the
+     * captured tracees directly (same UID, so [android.os.Process.sendSignal]/[killProcess] reach
+     * them even after they reparent to init).
      */
     fun stop(id: String) {
         val inst = _services.value[id]
@@ -214,6 +223,11 @@ class GuestServiceManager @Inject constructor(
             _services.update { it + (id to inst.copy(state = ServiceState.STOPPED)) }
         }
         val proc = processes.remove(id) ?: return
+        // Snapshot the guest tracee tree before we kill the launcher (after which the children
+        // reparent to init and we'd lose the parent link).
+        val launcherPid = pidOf(proc) ?: -1
+        val tracees = if (launcherPid > 0) descendantPids(launcherPid) else emptyList()
+
         proc.destroy()
         val exited = try {
             proc.waitFor(3, TimeUnit.SECONDS)
@@ -221,9 +235,69 @@ class GuestServiceManager @Inject constructor(
             false
         }
         if (!exited) {
-            Log.w(TAG, "guest service $id didn't exit on SIGTERM — forcing")
+            Log.w(TAG, "guest service $id launcher didn't exit on SIGTERM — forcing")
             proc.destroyForcibly()
         }
+
+        // Reap the orphaned guest tracees directly: proot won't have done it for us.
+        if (tracees.isNotEmpty()) {
+            tracees.forEach { pid -> runCatching { android.os.Process.sendSignal(pid, 15) } } // SIGTERM
+            try { Thread.sleep(300) } catch (_: InterruptedException) {}
+            tracees.forEach { pid -> runCatching { android.os.Process.killProcess(pid) } }     // SIGKILL
+            Log.d(TAG, "reaped ${tracees.size} guest tracee(s) for service $id: $tracees")
+        }
+    }
+
+    /**
+     * PIDs of every descendant of [rootPid] (children, grandchildren, …) as seen in the host's
+     * `/proc`. Reads the parent-PID field of each `/proc/<pid>/stat` (field 4, after the
+     * parenthesised comm which may itself contain spaces or `)`), builds the child map, and walks
+     * it breadth-first. Returns empty on any read failure — best-effort reaping.
+     */
+    private fun descendantPids(rootPid: Int): List<Int> {
+        val childrenOf = mutableMapOf<Int, MutableList<Int>>()
+        val procDirs = File("/proc").listFiles { f -> f.isDirectory && f.name.all(Char::isDigit) }
+            ?: return emptyList()
+        for (dir in procDirs) {
+            val pid = dir.name.toIntOrNull() ?: continue
+            val ppid = readPpid(File(dir, "stat")) ?: continue
+            childrenOf.getOrPut(ppid) { mutableListOf() }.add(pid)
+        }
+        val out = mutableListOf<Int>()
+        val queue = ArrayDeque<Int>().apply { add(rootPid) }
+        while (queue.isNotEmpty()) {
+            childrenOf[queue.removeFirst()]?.forEach { child ->
+                out.add(child)
+                queue.add(child)
+            }
+        }
+        return out
+    }
+
+    /**
+     * The OS pid of a started [Process]. Read via reflection on the platform `Process` impl's
+     * `pid` field — Kotlin won't resolve `Process.pid()` against this compile SDK, and reflection
+     * is the long-standing Android way to recover a child pid. Null if the field shape changes.
+     */
+    private fun pidOf(p: Process): Int? = try {
+        val v = p.javaClass.getDeclaredField("pid").apply { isAccessible = true }.get(p)
+        when (v) {
+            is Int -> v
+            is Long -> v.toInt()
+            else -> null
+        }
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun readPpid(statFile: File): Int? = try {
+        val stat = statFile.readText()
+        // Format: "<pid> (<comm>) <state> <ppid> ...". comm can contain spaces/')' so parse after
+        // the LAST ')': remaining fields are "state ppid ..." → ppid is index 1.
+        val afterComm = stat.substring(stat.lastIndexOf(')') + 1).trim()
+        afterComm.split(' ').getOrNull(1)?.toIntOrNull()
+    } catch (_: Exception) {
+        null
     }
 
     /** Re-launch every registered service flagged autostart (called on app start). */
