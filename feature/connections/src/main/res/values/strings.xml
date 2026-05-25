@@ -201,6 +201,8 @@
     <string name="connections_helper_disable_alt_screen">Scrollback works in screen/vim. Program output stays in scrollback on exit.</string>
     <string name="connections_toggle_forward_agent">Forward SSH agent</string>
     <string name="connections_helper_forward_agent">Exposes non-encrypted stored SSH keys to the remote host (for git push etc.). Encrypted keys are skipped.</string>
+    <string name="connections_toggle_password_only">Use password only</string>
+    <string name="connections_helper_password_only">Never offer saved SSH keys to this server — authenticate with the password (and keyboard-interactive) only. Use this for a password-only server so you\'re prompted for the password instead of silently failing key attempts.</string>
     <string name="connections_field_ssh_key">SSH Key</string>
     <string name="connections_ssh_key_any">Any (try all keys)</string>
     <string name="connections_ssh_key_none_hint">No SSH keys yet — add or generate one in the Keys tab, then attach it here.</string>

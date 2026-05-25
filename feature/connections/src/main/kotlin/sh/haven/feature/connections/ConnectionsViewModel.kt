@@ -1231,6 +1231,9 @@ class ConnectionsViewModel @Inject constructor(
 
         val jp = repository.getById(jumpProfileId) ?: return null
         if (!jp.sshPassword.isNullOrBlank()) return null
+        // "Use password only" — keys (explicit or keystore) are never offered,
+        // so the prompt is the only credential path; fire it (#121).
+        if (jp.ignoreSavedKeys) return jp
         if (jp.keyId != null) return null
         val unencryptedKeys = sshKeyRepository.getAllDecrypted()
             .filter { !it.isEncrypted }
@@ -3118,6 +3121,10 @@ class ConnectionsViewModel @Inject constructor(
         profile: ConnectionProfile,
         password: String,
     ): ConnectionConfig.AuthMethod {
+        // "Use password only" overrides any key element in the chain — keys are
+        // never offered (#121). resolveAuthMethod enforces the same for single
+        // specs and the legacy/explicit-key callers.
+        if (profile.ignoreSavedKeys) return ConnectionConfig.AuthMethod.Password(password)
         val specs = profile.authMethodSpecs
         if (specs.size <= 1) return resolveAuthMethod(profile, password)
 
@@ -3177,6 +3184,13 @@ class ConnectionsViewModel @Inject constructor(
         profile: ConnectionProfile,
         password: String,
     ): ConnectionConfig.AuthMethod {
+        // "Use password only" — never offer keys (explicit or keystore), so a
+        // password-only server gets the password prompt instead of failed key
+        // attempts (#121).
+        if (profile.ignoreSavedKeys) {
+            return ConnectionConfig.AuthMethod.Password(password)
+        }
+
         // Profile has an explicit key assigned
         val keyId = profile.keyId
         if (keyId != null) {

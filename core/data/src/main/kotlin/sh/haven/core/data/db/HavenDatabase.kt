@@ -38,7 +38,7 @@ import sh.haven.core.data.db.entities.WorkspaceProfile
         ProotInstallLog::class,
         TotpSecret::class,
     ],
-    version = 58,
+    version = 59,
     exportSchema = true,
 )
 abstract class HavenDatabase : RoomDatabase() {
@@ -934,6 +934,15 @@ abstract class HavenDatabase : RoomDatabase() {
                 addColumnIfMissing(db, "connection_profiles", "spaAllowMode", "TEXT NOT NULL DEFAULT 'SOURCE'")
                 addColumnIfMissing(db, "connection_profiles", "spaExplicitIp", "TEXT DEFAULT NULL")
                 addColumnIfMissing(db, "connection_profiles", "spaPort", "INTEGER NOT NULL DEFAULT 62201")
+            }
+        }
+
+        // #121: per-profile "use password only" — when set, the connect path
+        // never offers keystore keys, so a password-only server gets the
+        // password prompt instead of failed key attempts.
+        val MIGRATION_58_59 = object : Migration(58, 59) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                addColumnIfMissing(db, "connection_profiles", "ignoreSavedKeys", "INTEGER NOT NULL DEFAULT 0")
             }
         }
 

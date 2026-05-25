@@ -33,6 +33,15 @@ data class ConnectionProfile(
      */
     @ColumnInfo(defaultValue = "0")
     val totpConfirmBeforeSend: Boolean = false,
+    /**
+     * When true, this connection authenticates with password (and
+     * keyboard-interactive) only — saved SSH keys in the keystore are never
+     * offered to the server, even when no password is stored. Lets a profile
+     * target a password-only server without the auto-key-offer suppressing the
+     * password prompt (#121). Default false = keys are auto-offered as before.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val ignoreSavedKeys: Boolean = false,
     val colorTag: Int = 0,
     val lastConnected: Long? = null,
     val sortOrder: Int = 0,

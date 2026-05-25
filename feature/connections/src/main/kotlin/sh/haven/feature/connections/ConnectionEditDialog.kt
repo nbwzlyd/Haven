@@ -249,6 +249,7 @@ fun ConnectionEditDialog(
         )
     }
     var totpConfirmBeforeSend by rememberSaveable { mutableStateOf(existing?.totpConfirmBeforeSend ?: false) }
+    var ignoreSavedKeys by rememberSaveable { mutableStateOf(existing?.ignoreSavedKeys ?: false) }
     var tunnelConfigId by rememberSaveable { mutableStateOf(existing?.tunnelConfigId) }
 
     // Cloudflare Tunnel transport (GH #154). When `useCloudflareTunnel`
@@ -2271,6 +2272,16 @@ fun ConnectionEditDialog(
                         )
                     }
 
+                    // Password-only (#121): never offer saved SSH keys. For a
+                    // password-only server, the auto-key-offer otherwise
+                    // suppresses the password prompt when any key is stored.
+                    BooleanToggleRow(
+                        label = stringResource(R.string.connections_toggle_password_only),
+                        checked = ignoreSavedKeys,
+                        onCheckedChange = { ignoreSavedKeys = it },
+                        description = stringResource(R.string.connections_helper_password_only),
+                    )
+
                     // Saved VNC settings (shown when the SSH profile has had
                     // VNC configured via the terminal's VNC quick-dialog with
                     // "Save for this connection" ticked). Without this block
@@ -2797,6 +2808,7 @@ fun ConnectionEditDialog(
                                 .filterIsInstance<ConnectionProfile.AuthMethodSpec.Key>()
                                 .firstOrNull()?.keyId,
                             totpConfirmBeforeSend = totpConfirmBeforeSend,
+                            ignoreSavedKeys = ignoreSavedKeys,
                             // tunnelConfigId is owned by the ViewModel save
                             // helper when the user picks the inline CF
                             // transport — it overwrites this with the

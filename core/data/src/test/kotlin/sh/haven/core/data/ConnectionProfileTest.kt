@@ -188,6 +188,18 @@ class ConnectionProfileTest {
     }
 
     @Test
+    fun `ignoreSavedKeys defaults to false`() {
+        val p = ConnectionProfile(label = "t", host = "h", username = "u")
+        assertEquals(false, p.ignoreSavedKeys)
+    }
+
+    @Test
+    fun `ignoreSavedKeys round-trips through copy`() {
+        val p = ConnectionProfile(label = "t", host = "h", username = "u")
+        assertEquals(true, p.copy(ignoreSavedKeys = true).ignoreSavedKeys)
+    }
+
+    @Test
     fun `AuthMethodSpec parseList ignores blank and unknown tokens`() {
         val parsed = ConnectionProfile.AuthMethodSpec.parseList("PASSWORD\n\nBOGUS\nKEY:x")
         assertEquals(

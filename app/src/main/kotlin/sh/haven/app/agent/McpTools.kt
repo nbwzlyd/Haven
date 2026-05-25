@@ -1871,7 +1871,7 @@ internal class McpTools(
         ) { args -> setProfileRouting(args) },
 
         "create_connection" to ToolHandler(
-            description = "Create a saved connection profile. Supports connectionType=SSH, SMB, VNC, RDP. SSH-family fields: username (required), password (optional, stored), keyId (optional — references list_ssh_keys), useMosh (turn an SSH profile into a Mosh profile). SMB: smbShare (required), username + password, smbDomain. VNC: vncUsername, vncPassword, vncPort, and vncSshForward + vncSshProfileId to tunnel VNC through a saved SSH profile. RDP: rdpUsername (required), rdpPassword, rdpDomain, rdpPort. The new profile id is returned for follow-up calls (set_profile_routing, connect_profile). For Reticulum / rclone / local create the profile in the UI — those paths need OAuth / destination-hash flows the agent can't drive.",
+            description = "Create a saved connection profile. Supports connectionType=SSH, SMB, VNC, RDP. SSH-family fields: username (required), password (optional, stored), keyId (optional — references list_ssh_keys), ignoreSavedKeys (force password-only auth, never offer saved keys), useMosh (turn an SSH profile into a Mosh profile). SMB: smbShare (required), username + password, smbDomain. VNC: vncUsername, vncPassword, vncPort, and vncSshForward + vncSshProfileId to tunnel VNC through a saved SSH profile. RDP: rdpUsername (required), rdpPassword, rdpDomain, rdpPort. The new profile id is returned for follow-up calls (set_profile_routing, connect_profile). For Reticulum / rclone / local create the profile in the UI — those paths need OAuth / destination-hash flows the agent can't drive.",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -1894,6 +1894,7 @@ internal class McpTools(
                     put("tunnelOnly", JSONObject().apply { put("type", "boolean"); put("description", "SSH only: tunnel-only mode (#150). When true, the profile brings up the SSH transport and registers port forwards but does not open a terminal. Default false. Pair with auto_reconnect for autossh-style keepalive.") })
                     put("useMosh", JSONObject().apply { put("type", "boolean"); put("description", "SSH only: when true, the profile uses Mosh on top of the SSH bootstrap. SSH execs `mosh-server new -s`, parses MOSH CONNECT, then the UDP transport takes over. Default false.") })
                     put("keyId", JSONObject().apply { put("type", "string"); put("description", "SSH only: id of a saved SSH key (from list_ssh_keys) to authenticate with. Mutually optional with password.") })
+                    put("ignoreSavedKeys", JSONObject().apply { put("type", "boolean"); put("description", "SSH-family only: when true, authenticate with password (and keyboard-interactive) only — saved keystore keys are never offered to the server. Lets a profile target a password-only server without the auto-key-offer suppressing the password prompt (#121). Default false.") })
                     put("authMethods", JSONObject().apply {
                         put("type", "array")
                         put("items", JSONObject().apply { put("type", "string") })
@@ -2218,6 +2219,7 @@ internal class McpTools(
         put("authType", p.authType.name)
         put("hasStoredPassword", !p.sshPassword.isNullOrEmpty())
         put("hasKey", p.keyId != null)
+        if (p.ignoreSavedKeys) put("ignoreSavedKeys", true)
         if (p.authMethodSpecs.size > 1) {
             put("authMethods", org.json.JSONArray(p.authMethodSpecs.map { it.serialize() }))
         }
@@ -4884,6 +4886,11 @@ internal class McpTools(
             throw IllegalArgumentException("tunnelOnly is only meaningful for SSH connections")
         }
 
+        // #121: password-only — never offer saved keys. Belongs on the SSH
+        // profile (for VNC-over-SSH set it on the referenced SSH profile, since
+        // the VNC profile itself does no SSH key auth).
+        val ignoreSavedKeys = args.optBoolean("ignoreSavedKeys", false)
+
         // #166: optional ordered auth-method list. Each element is a token:
         // "PASSWORD", "KEY" (any saved key), "KEY:<keyId>", or
         // "KEYBOARD_INTERACTIVE". Serialised newline-per-token to match
@@ -4915,6 +4922,7 @@ internal class McpTools(
                 useMosh = args.optBoolean("useMosh", false),
                 keyId = args.optString("keyId").ifBlank { null },
                 authMethods = authMethodsText,
+                ignoreSavedKeys = ignoreSavedKeys,
                 tunnelConfigId = tunnelConfigId,
                 tunnelOnly = tunnelOnly,
                 portKnockSequence = knockSequence,
