@@ -1217,6 +1217,18 @@ class ConnectionsViewModel @Inject constructor(
     private suspend fun jumpHostNeedsPasswordPrompt(
         jumpProfileId: String,
     ): ConnectionProfile? {
+        // A live jump session already exists → reuse it silently, no prompt.
+        // Without this, the post-auth replay of connectVnc/connectRdp/connectSmb
+        // re-prompts forever when the entered password wasn't saved ("remember"
+        // off): the prompt check fires before connectJumpHost's connected-session
+        // reuse, so it never sees that auth already succeeded — an endless
+        // password loop, and cancelling left the now-open SSH session orphaned
+        // (#121, KoriKraut). Also covers the case where the user already opened
+        // the jump host in a Terminal tab.
+        val alreadyConnected = sshSessionManager.getSessionsForProfile(jumpProfileId)
+            .any { it.status == SshSessionManager.SessionState.Status.CONNECTED }
+        if (alreadyConnected) return null
+
         val jp = repository.getById(jumpProfileId) ?: return null
         if (!jp.sshPassword.isNullOrBlank()) return null
         if (jp.keyId != null) return null
