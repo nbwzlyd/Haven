@@ -187,8 +187,8 @@ val LocalToolbarCallbacks = compositionLocalOf<ToolbarCallbacks> {
     error("ToolbarCallbacks not provided")
 }
 
-/** Default minimum width for a toolbar key (overridable via the Haven setting). */
-val DEFAULT_MIN_KEY_WIDTH = 36.dp
+/** Default minimum width for a toolbar key (0 = hug content; overridable via the Haven setting). */
+val DEFAULT_MIN_KEY_WIDTH = 0.dp
 
 /**
  * Minimum width every toolbar key is stretched to, threaded from the user's

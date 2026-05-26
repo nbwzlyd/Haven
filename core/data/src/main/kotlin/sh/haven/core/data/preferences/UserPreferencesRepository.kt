@@ -1136,8 +1136,8 @@ class UserPreferencesRepository @Inject constructor(
         const val DEFAULT_FONT_SIZE = 14
         const val MIN_FONT_SIZE = 8
         const val MAX_FONT_SIZE = 32
-        // Terminal toolbar minimum key width (dp).
-        const val DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH = 36
+        // Terminal toolbar minimum key width (dp). Default 0 = keys hug content.
+        const val DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH = 0
         const val MIN_TOOLBAR_MIN_BUTTON_WIDTH = 0
         const val MAX_TOOLBAR_MIN_BUTTON_WIDTH = 64
         const val DEFAULT_SCROLLBACK_ROWS = 1000
