@@ -1086,8 +1086,11 @@ private fun ToolbarIconToggleButton(
 
 @Composable
 private fun SymbolButton(label: String, onClick: () -> Unit) {
+    // Single-character keys (built-in symbols like | ~) use the larger bold
+    // glyph; multi-character labels (custom keys like "⇧Tab", "mcp") use the
+    // normal text weight so they match the built-in word keys (Esc/Tab/…).
     ToolbarKeyButton(onClick = onClick, repeating = true) {
-        ToolbarKeyText(label, glyph = true)
+        ToolbarKeyText(label, glyph = label.length <= 1)
     }
 }
 
