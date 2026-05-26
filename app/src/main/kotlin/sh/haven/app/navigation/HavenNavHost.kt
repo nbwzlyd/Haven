@@ -268,6 +268,8 @@ fun HavenNavHost(
         .collectAsState(initial = sh.haven.core.data.preferences.ToolbarLayout.DEFAULT)
     val navBlockMode by preferencesRepository.navBlockMode
         .collectAsState(initial = sh.haven.core.data.preferences.NavBlockMode.ALIGNED)
+    val toolbarMinKeyWidth by preferencesRepository.toolbarMinButtonWidth
+        .collectAsState(initial = sh.haven.core.data.preferences.UserPreferencesRepository.DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH)
     val showSearchButton by preferencesRepository.showSearchButton
         .collectAsState(initial = false)
     val showCopyOutputButton by preferencesRepository.showCopyOutputButton
@@ -452,6 +454,7 @@ fun HavenNavHost(
                         terminalFontPath = terminalFontPath,
                         toolbarLayout = toolbarLayout,
                         navBlockMode = navBlockMode,
+                        toolbarMinKeyWidth = toolbarMinKeyWidth,
                         showSearchButton = showSearchButton,
                         showCopyOutputButton = showCopyOutputButton,
                         keepScreenOnInTerminal = keepScreenOnInTerminal,

@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
@@ -185,6 +187,16 @@ val LocalToolbarCallbacks = compositionLocalOf<ToolbarCallbacks> {
     error("ToolbarCallbacks not provided")
 }
 
+/** Default minimum width for a toolbar key (overridable via the Haven setting). */
+val DEFAULT_MIN_KEY_WIDTH = 36.dp
+
+/**
+ * Minimum width every toolbar key is stretched to, threaded from the user's
+ * "minimum key width" setting via [KeyboardToolbar]. Read by the shared
+ * [ToolbarKeyButton] primitive so every key honours it uniformly.
+ */
+private val LocalToolbarMinKeyWidth = compositionLocalOf { DEFAULT_MIN_KEY_WIDTH }
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun KeyboardToolbar(
@@ -196,6 +208,7 @@ fun KeyboardToolbar(
     bracketPasteMode: Boolean = false,
     layout: ToolbarLayout = ToolbarLayout.DEFAULT,
     navBlockMode: sh.haven.core.data.preferences.NavBlockMode = sh.haven.core.data.preferences.NavBlockMode.ALIGNED,
+    minKeyWidth: Dp = DEFAULT_MIN_KEY_WIDTH,
     onToggleCtrl: () -> Unit = {},
     onToggleAlt: () -> Unit = {},
     onVncTap: (() -> Unit)? = null,
@@ -284,7 +297,10 @@ fun KeyboardToolbar(
         onAttachTap = onAttachTap,
     )
 
-    CompositionLocalProvider(LocalToolbarCallbacks provides callbacks) {
+    CompositionLocalProvider(
+        LocalToolbarCallbacks provides callbacks,
+        LocalToolbarMinKeyWidth provides minKeyWidth,
+    ) {
         Surface(
             tonalElevation = if (reorderMode) 4.dp else 2.dp,
             modifier = modifier.pointerInput(reorderMode) {
@@ -558,14 +574,14 @@ private fun NavBuiltInKey(
     // Arrow and nav keys go through dispatchKey so libvterm applies
     // DECCKM (application cursor mode) — needed for Mutt, vim, etc.
     when (key) {
-        ToolbarKey.ARROW_LEFT -> NavArrowButton("\u2190") { cb.onDispatchKey(0, VTERM_KEY_LEFT) }
-        ToolbarKey.ARROW_UP -> NavArrowButton("\u2191") { cb.onDispatchKey(0, VTERM_KEY_UP) }
-        ToolbarKey.ARROW_DOWN -> NavArrowButton("\u2193") { cb.onDispatchKey(0, VTERM_KEY_DOWN) }
-        ToolbarKey.ARROW_RIGHT -> NavArrowButton("\u2192") { cb.onDispatchKey(0, VTERM_KEY_RIGHT) }
-        ToolbarKey.HOME -> NavTextButton("Home") { cb.onDispatchKey(0, VTERM_KEY_HOME) }
-        ToolbarKey.END -> NavTextButton("End") { cb.onDispatchKey(0, VTERM_KEY_END) }
-        ToolbarKey.PGUP -> NavTextButton("PgUp") { cb.onDispatchKey(0, VTERM_KEY_PAGEUP) }
-        ToolbarKey.PGDN -> NavTextButton("PgDn") { cb.onDispatchKey(0, VTERM_KEY_PAGEDOWN) }
+        ToolbarKey.ARROW_LEFT -> ToolbarArrowButton("\u2190") { cb.onDispatchKey(0, VTERM_KEY_LEFT) }
+        ToolbarKey.ARROW_UP -> ToolbarArrowButton("\u2191") { cb.onDispatchKey(0, VTERM_KEY_UP) }
+        ToolbarKey.ARROW_DOWN -> ToolbarArrowButton("\u2193") { cb.onDispatchKey(0, VTERM_KEY_DOWN) }
+        ToolbarKey.ARROW_RIGHT -> ToolbarArrowButton("\u2192") { cb.onDispatchKey(0, VTERM_KEY_RIGHT) }
+        ToolbarKey.HOME -> ToolbarTextButton("Home") { cb.onDispatchKey(0, VTERM_KEY_HOME) }
+        ToolbarKey.END -> ToolbarTextButton("End") { cb.onDispatchKey(0, VTERM_KEY_END) }
+        ToolbarKey.PGUP -> ToolbarTextButton("PgUp") { cb.onDispatchKey(0, VTERM_KEY_PAGEUP) }
+        ToolbarKey.PGDN -> ToolbarTextButton("PgDn") { cb.onDispatchKey(0, VTERM_KEY_PAGEDOWN) }
         else -> Spacer(Modifier.width(NAV_CELL_WIDTH))
     }
 }
@@ -727,9 +743,14 @@ private fun BuiltInKey(
     when (key) {
         @OptIn(ExperimentalFoundationApi::class)
         ToolbarKey.KEYBOARD -> {
-            Box(
+            // Bespoke (not the shared primitive) because it needs combinedClickable
+            // for the long-press → reorder gesture, but styled to match the
+            // primitive so it sits flush with the other keys.
+            Surface(
                 modifier = Modifier
-                    .size(32.dp)
+                    .padding(horizontal = 1.dp)
+                    .height(32.dp)
+                    .widthIn(min = LocalToolbarMinKeyWidth.current)
                     .combinedClickable(
                         onClick = {
                             val window = (view.context as? Activity)?.window ?: return@combinedClickable
@@ -746,9 +767,16 @@ private fun BuiltInKey(
                             cb.onEnterReorderMode()
                         },
                     ),
-                contentAlignment = Alignment.Center,
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
             ) {
-                Icon(Icons.Filled.Keyboard, contentDescription = stringResource(R.string.toolbar_toggle_keyboard), modifier = Modifier.size(18.dp))
+                Box(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    ToolbarKeyIcon(Icons.Filled.Keyboard, stringResource(R.string.toolbar_toggle_keyboard))
+                }
             }
         }
         ToolbarKey.ESC_KEY -> ToolbarTextButton("Esc") { cb.onSendBytes(KEY_ESC) }
@@ -896,37 +924,6 @@ private fun NavCell(content: @Composable () -> Unit) {
     }
 }
 
-@Composable
-private fun NavArrowButton(label: String, onClick: () -> Unit) {
-    NavCell {
-        RepeatingButton(
-            onClick = onClick,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-        ) {
-            Text(
-                label,
-                fontSize = 16.sp,
-                lineHeight = 16.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-            )
-        }
-    }
-}
-
-@Composable
-private fun NavTextButton(label: String, onClick: () -> Unit) {
-    NavCell {
-        RepeatingButton(
-            onClick = onClick,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
-        ) {
-            Text(label, fontSize = 11.sp, lineHeight = 11.sp)
-        }
-    }
-}
-
 // --- Key repeat ---
 
 private const val REPEAT_DELAY_MS = 400L
@@ -937,19 +934,32 @@ private const val REPEAT_INTERVAL_MS = 80L
  * press/release, bypassing Compose's gesture system (which the horizontalScroll
  * parent intercepts). Consumes touch events and handles both tap and repeat.
  */
+/**
+ * The single toolbar-key primitive every key renders through, so all keys share
+ * one height, padding, shape, min-width, selected-styling and repeat behaviour
+ * (the previous per-key composables had drifted to 30-vs-32dp, 6-vs-8dp,
+ * 58dp Material minimums, etc. — the root of a run of alignment/width bugs).
+ *
+ * Backed by a tonal [Surface] (not FilledTonalButton, which forces a ~58dp
+ * minimum width). Width = content + 8dp padding, floored at [LocalToolbarMinKeyWidth]
+ * (the user's "minimum key width" setting). [selected] paints the active toggle
+ * state; [repeating] enables press-and-hold key repeat via the Android
+ * MotionEvent interop (Compose gestures get stolen by the scrolling parent).
+ */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun RepeatingButton(
+private fun ToolbarKeyButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    contentPadding: PaddingValues = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+    selected: Boolean = false,
+    repeating: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     var isPressed by remember { mutableStateOf(false) }
     var didRepeat by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isPressed) {
-        if (isPressed) {
+    LaunchedEffect(isPressed, repeating) {
+        if (isPressed && repeating) {
             didRepeat = false
             delay(REPEAT_DELAY_MS)
             didRepeat = true
@@ -960,89 +970,36 @@ private fun RepeatingButton(
         }
     }
 
-    // A tonal Surface instead of FilledTonalButton: Material's button forces a
-    // 58dp minimum width internally, so every key — even "|" or "~" — wasted
-    // that much horizontal space. A Surface sizes to its content + padding, so
-    // each key is only as wide as it needs to be (#184 follow-up).
     Surface(
-        modifier = modifier.pointerInteropFilter { motionEvent ->
-            when (motionEvent.action) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    isPressed = true
-                    true // consume to receive UP
+        modifier = modifier
+            .padding(horizontal = 1.dp)
+            .height(32.dp)
+            .widthIn(min = LocalToolbarMinKeyWidth.current)
+            .pointerInteropFilter { motionEvent ->
+                when (motionEvent.action) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        isPressed = true
+                        true // consume to receive UP
+                    }
+                    android.view.MotionEvent.ACTION_UP -> {
+                        if (!didRepeat) onClick() // single tap
+                        isPressed = false
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_CANCEL -> {
+                        isPressed = false
+                        true
+                    }
+                    else -> false
                 }
-                android.view.MotionEvent.ACTION_UP -> {
-                    if (!didRepeat) onClick() // single tap
-                    isPressed = false
-                    true
-                }
-                android.view.MotionEvent.ACTION_CANCEL -> {
-                    isPressed = false
-                    true
-                }
-                else -> false
-            }
-        },
+            },
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-    ) {
-        Box(
-            modifier = Modifier.padding(contentPadding),
-            contentAlignment = Alignment.Center,
-        ) {
-            content()
-        }
-    }
-}
-
-// --- Standard buttons (variable width) ---
-
-@Composable
-private fun ToolbarArrowButton(label: String, onClick: () -> Unit) {
-    RepeatingButton(
-        onClick = onClick,
-        modifier = Modifier
-            .padding(horizontal = 1.dp)
-            .height(32.dp),
-    ) {
-        Text(
-            label,
-            fontSize = 16.sp,
-            lineHeight = 16.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-        )
-    }
-}
-
-@Composable
-private fun ToolbarTextButton(label: String, onClick: () -> Unit) {
-    RepeatingButton(
-        onClick = onClick,
-        modifier = Modifier
-            .padding(horizontal = 1.dp)
-            .height(32.dp),
-    ) {
-        Text(label, fontSize = 11.sp, lineHeight = 11.sp)
-    }
-}
-
-@Composable
-private fun ToolbarToggleButton(label: String, active: Boolean, onClick: () -> Unit) {
-    // Compact Surface (content-width) matching RepeatingButton, so the modifier
-    // toggles aren't padded to Material's 58dp minimum (#184 follow-up).
-    Surface(
-        onClick = onClick,
-        modifier = Modifier
-            .padding(horizontal = 1.dp)
-            .height(32.dp),
-        shape = RoundedCornerShape(8.dp),
-        color = if (active) {
+        color = if (selected) {
             MaterialTheme.colorScheme.primary
         } else {
             MaterialTheme.colorScheme.secondaryContainer
         },
-        contentColor = if (active) {
+        contentColor = if (selected) {
             MaterialTheme.colorScheme.onPrimary
         } else {
             MaterialTheme.colorScheme.onSecondaryContainer
@@ -1052,8 +1009,60 @@ private fun ToolbarToggleButton(label: String, active: Boolean, onClick: () -> U
             modifier = Modifier.padding(horizontal = 8.dp),
             contentAlignment = Alignment.Center,
         ) {
-            Text(label, fontSize = 11.sp, lineHeight = 11.sp)
+            content()
         }
+    }
+}
+
+/** Uniform key label. [glyph] = the larger bold style for arrows/symbols/⏎. */
+@Composable
+private fun ToolbarKeyText(label: String, glyph: Boolean = false) {
+    Text(
+        label,
+        fontSize = if (glyph) 16.sp else 12.sp,
+        lineHeight = if (glyph) 16.sp else 12.sp,
+        fontWeight = if (glyph) androidx.compose.ui.text.font.FontWeight.Bold else null,
+    )
+}
+
+/** Uniform key icon (18dp) for icon keys. */
+@Composable
+private fun ToolbarKeyIcon(icon: ImageVector, contentDescription: String? = null) {
+    Icon(icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+}
+
+/**
+ * The icon for keys drawn as an icon rather than text. Used by both the live
+ * render and the reorder-mode chips so a key looks identical in either mode.
+ * Voice is represented by the secure-state lock. Returns null for text keys.
+ */
+private fun keyIcon(key: ToolbarKey): ImageVector? = when (key) {
+    ToolbarKey.KEYBOARD -> Icons.Filled.Keyboard
+    ToolbarKey.ATTACH -> Icons.Filled.AttachFile
+    ToolbarKey.VOICE_KEYBOARD -> Icons.Filled.Lock
+    else -> null
+}
+
+// --- Standard buttons (variable width) ---
+
+@Composable
+private fun ToolbarArrowButton(label: String, onClick: () -> Unit) {
+    ToolbarKeyButton(onClick = onClick, repeating = true) {
+        ToolbarKeyText(label, glyph = true)
+    }
+}
+
+@Composable
+private fun ToolbarTextButton(label: String, onClick: () -> Unit) {
+    ToolbarKeyButton(onClick = onClick, repeating = true) {
+        ToolbarKeyText(label)
+    }
+}
+
+@Composable
+private fun ToolbarToggleButton(label: String, active: Boolean, onClick: () -> Unit) {
+    ToolbarKeyButton(onClick = onClick, selected = active) {
+        ToolbarKeyText(label)
     }
 }
 
@@ -1070,33 +1079,15 @@ private fun ToolbarIconToggleButton(
     active: Boolean,
     onClick: () -> Unit,
 ) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier.size(32.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = contentDescription,
-            modifier = Modifier.size(18.dp),
-            tint = if (active) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            },
-        )
+    ToolbarKeyButton(onClick = onClick, selected = active) {
+        ToolbarKeyIcon(icon, contentDescription)
     }
 }
 
 @Composable
 private fun SymbolButton(label: String, onClick: () -> Unit) {
-    RepeatingButton(
-        onClick = onClick,
-        modifier = Modifier
-            .padding(horizontal = 1.dp)
-            .height(30.dp),
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-    ) {
-        Text(label, fontSize = 12.sp, lineHeight = 12.sp)
+    ToolbarKeyButton(onClick = onClick, repeating = true) {
+        ToolbarKeyText(label, glyph = true)
     }
 }
 
@@ -1124,11 +1115,8 @@ private fun ReorderEditButton() {
 
 @Composable
 private fun ToolbarIconButton(icon: ImageVector, description: String, onClick: () -> Unit) {
-    IconButton(
-        onClick = onClick,
-        modifier = Modifier.size(32.dp),
-    ) {
-        Icon(icon, contentDescription = description, modifier = Modifier.size(18.dp))
+    ToolbarKeyButton(onClick = onClick) {
+        ToolbarKeyIcon(icon, description)
     }
 }
 
@@ -1784,15 +1772,29 @@ private fun ReorderableToolbarRow(
 
 @Composable
 private fun ReorderModeKey(item: ToolbarItem) {
-    FilledTonalButton(
-        onClick = {},
+    // Icon keys show their icon here too (not a text label), so a key looks the
+    // same in reorder mode as in live mode.
+    val icon = (item as? ToolbarItem.BuiltIn)?.let { keyIcon(it.key) }
+    Surface(
         modifier = Modifier
             .padding(horizontal = 1.dp)
-            .height(32.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            .height(32.dp)
+            .widthIn(min = LocalToolbarMinKeyWidth.current),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)),
     ) {
-        Text(item.displayLabel, fontSize = 11.sp, lineHeight = 11.sp)
+        Box(
+            modifier = Modifier.padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (icon != null) {
+                ToolbarKeyIcon(icon, item.displayLabel)
+            } else {
+                ToolbarKeyText(item.displayLabel)
+            }
+        }
     }
 }
 

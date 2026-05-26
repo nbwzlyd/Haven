@@ -359,6 +359,13 @@ class SettingsViewModel @Inject constructor(
             NavBlockMode.ALIGNED,
         )
 
+    val toolbarMinButtonWidth: StateFlow<Int> = preferencesRepository.toolbarMinButtonWidth
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            UserPreferencesRepository.DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH,
+        )
+
     val screenOrder: StateFlow<List<String>> = preferencesRepository.screenOrder
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -620,6 +627,12 @@ class SettingsViewModel @Inject constructor(
     fun setNavBlockMode(mode: NavBlockMode) {
         viewModelScope.launch {
             preferencesRepository.setNavBlockMode(mode)
+        }
+    }
+
+    fun setToolbarMinButtonWidth(dp: Int) {
+        viewModelScope.launch {
+            preferencesRepository.setToolbarMinButtonWidth(dp)
         }
     }
 

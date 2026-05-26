@@ -142,6 +142,7 @@ fun TerminalScreen(
     terminalFontPath: String? = null,
     toolbarLayout: ToolbarLayout = ToolbarLayout.DEFAULT,
     navBlockMode: sh.haven.core.data.preferences.NavBlockMode = sh.haven.core.data.preferences.NavBlockMode.ALIGNED,
+    toolbarMinKeyWidth: Int = sh.haven.core.data.preferences.UserPreferencesRepository.DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH,
     showSearchButton: Boolean = false,
     showCopyOutputButton: Boolean = false,
     keepScreenOnInTerminal: Boolean = false,
@@ -1076,6 +1077,7 @@ fun TerminalScreen(
                         bracketPasteMode = isBracketPaste,
                         layout = toolbarLayout,
                         navBlockMode = navBlockMode,
+                        minKeyWidth = toolbarMinKeyWidth.dp,
                         onToggleCtrl = viewModel::toggleCtrl,
                         onToggleAlt = viewModel::toggleAlt,
                         onVncTap = if (activeTab.transportType == "SSH") {{

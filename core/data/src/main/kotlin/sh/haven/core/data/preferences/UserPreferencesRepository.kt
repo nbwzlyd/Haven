@@ -36,6 +36,7 @@ class UserPreferencesRepository @Inject constructor(
     private val toolbarRow1Key = stringPreferencesKey("toolbar_row1") // legacy
     private val toolbarRow2Key = stringPreferencesKey("toolbar_row2") // legacy
     private val toolbarLayoutKey = stringPreferencesKey("toolbar_layout")
+    private val toolbarMinButtonWidthKey = intPreferencesKey("toolbar_min_button_width")
     private val navBlockModeKey = stringPreferencesKey("nav_block_mode")
     private val sessionCommandOverrideKey = stringPreferencesKey("session_command_override")
     private val sftpSortModeKey = stringPreferencesKey("sftp_sort_mode")
@@ -640,6 +641,16 @@ class UserPreferencesRepository @Inject constructor(
     }
 
     /**
+     * Minimum width (dp) every terminal-toolbar key is stretched to. 0 = each
+     * key hugs its content; larger values give bigger, more tappable keys at
+     * the cost of fitting fewer per row. Applied uniformly by the toolbar's
+     * shared key primitive.
+     */
+    val toolbarMinButtonWidth: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[toolbarMinButtonWidthKey] ?: DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH
+    }
+
+    /**
      * Maximum number of lines retained in each tab's scrollback ring (#151).
      * The emulator reads this once at construction; changing it affects
      * newly created tabs, not existing ones. Larger values cost roughly
@@ -716,6 +727,13 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setTerminalFontSize(sizeSp: Int) {
         dataStore.edit { prefs ->
             prefs[terminalFontSizeKey] = sizeSp.coerceIn(MIN_FONT_SIZE, MAX_FONT_SIZE)
+        }
+    }
+
+    suspend fun setToolbarMinButtonWidth(dp: Int) {
+        dataStore.edit { prefs ->
+            prefs[toolbarMinButtonWidthKey] =
+                dp.coerceIn(MIN_TOOLBAR_MIN_BUTTON_WIDTH, MAX_TOOLBAR_MIN_BUTTON_WIDTH)
         }
     }
 
@@ -1118,6 +1136,10 @@ class UserPreferencesRepository @Inject constructor(
         const val DEFAULT_FONT_SIZE = 14
         const val MIN_FONT_SIZE = 8
         const val MAX_FONT_SIZE = 32
+        // Terminal toolbar minimum key width (dp).
+        const val DEFAULT_TOOLBAR_MIN_BUTTON_WIDTH = 36
+        const val MIN_TOOLBAR_MIN_BUTTON_WIDTH = 0
+        const val MAX_TOOLBAR_MIN_BUTTON_WIDTH = 64
         const val DEFAULT_SCROLLBACK_ROWS = 1000
         const val MIN_SCROLLBACK_ROWS = 100
         const val MAX_SCROLLBACK_ROWS = 25000

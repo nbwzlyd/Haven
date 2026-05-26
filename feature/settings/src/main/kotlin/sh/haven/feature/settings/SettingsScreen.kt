@@ -161,6 +161,7 @@ fun SettingsScreen(
     val toolbarLayout by viewModel.toolbarLayout.collectAsState()
     val toolbarLayoutJson by viewModel.toolbarLayoutJson.collectAsState()
     val navBlockMode by viewModel.navBlockMode.collectAsState()
+    val toolbarMinButtonWidth by viewModel.toolbarMinButtonWidth.collectAsState()
     val showSearchButton by viewModel.showSearchButton.collectAsState()
     val showCopyOutputButton by viewModel.showCopyOutputButton.collectAsState()
     val keepScreenOnInTerminal by viewModel.keepScreenOnInTerminal.collectAsState()
@@ -1365,6 +1366,8 @@ fun SettingsScreen(
             layout = toolbarLayout,
             layoutJson = toolbarLayoutJson,
             navBlockMode = navBlockMode,
+            minButtonWidth = toolbarMinButtonWidth,
+            onMinButtonWidthChange = { viewModel.setToolbarMinButtonWidth(it) },
             onDismiss = { showToolbarConfigDialog = false },
             onSaveLayout = { layout ->
                 viewModel.setToolbarLayout(layout)
@@ -2130,6 +2133,8 @@ private fun ToolbarConfigDialog(
     layout: ToolbarLayout,
     layoutJson: String,
     navBlockMode: NavBlockMode,
+    minButtonWidth: Int,
+    onMinButtonWidthChange: (Int) -> Unit,
     onDismiss: () -> Unit,
     onSaveLayout: (ToolbarLayout) -> Unit,
     onSaveJson: (String) -> Unit,
@@ -2148,6 +2153,8 @@ private fun ToolbarConfigDialog(
         ToolbarSimpleEditor(
             layout = layout,
             navBlockMode = navBlockMode,
+            minButtonWidth = minButtonWidth,
+            onMinButtonWidthChange = onMinButtonWidthChange,
             onDismiss = onDismiss,
             onSave = onSaveLayout,
             onAdvancedMode = { advancedMode = true },
@@ -2165,6 +2172,8 @@ private data class CustomKeyState(
 private fun ToolbarSimpleEditor(
     layout: ToolbarLayout,
     navBlockMode: NavBlockMode,
+    minButtonWidth: Int,
+    onMinButtonWidthChange: (Int) -> Unit,
     onDismiss: () -> Unit,
     onSave: (ToolbarLayout) -> Unit,
     onAdvancedMode: () -> Unit,
@@ -2253,6 +2262,24 @@ private fun ToolbarSimpleEditor(
                         )
                     }
                 }
+
+                // Minimum key width — widens every key uniformly for tappability.
+                var minWidthSlider by remember(minButtonWidth) {
+                    mutableStateOf(minButtonWidth.toFloat())
+                }
+                Text(
+                    stringResource(R.string.settings_toolbar_min_key_width, minWidthSlider.roundToInt()),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                )
+                Slider(
+                    value = minWidthSlider,
+                    onValueChange = { minWidthSlider = it },
+                    onValueChangeFinished = { onMinButtonWidthChange(minWidthSlider.roundToInt()) },
+                    valueRange = 0f..64f,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
 
                 Text(
                     stringResource(R.string.settings_toolbar_function_keys),
