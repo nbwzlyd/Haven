@@ -862,16 +862,16 @@ fun TerminalScreen(
 
                     val isMouseMode by activeTab.mouseMode.collectAsState()
                     val isBracketPaste by activeTab.bracketPasteMode.collectAsState()
-                    val isAltScreen by activeTab.altScreen.collectAsState()
 
                     // Build gesture callback when mouse mode is active.
-                    // Taps and long-presses are gated by mouseInputEnabled.
-                    // Scroll: on the alternate screen (vim/less/htop) forward a
-                    // wheel event to the app; on the normal screen let the swipe
-                    // scroll Haven's own scrollback even while mouse reporting is
-                    // on — matching xterm/gnome-terminal, so history stays
-                    // reachable by touch. (#175)
-                    val gestureCallback = remember(activeTab, isMouseMode, isAltScreen, mouseInputEnabled, mouseDragSelects, terminalRightClick) {
+                    // Taps and long-presses are gated by mouseInputEnabled;
+                    // the scroll wheel forwards to the app whenever it has
+                    // requested mouse mode, so tmux/vim/less copy-mode scroll
+                    // works. (A normal-screen-only carve-out for local
+                    // scrollback was tried in #175 but broke tmux scrollback —
+                    // reverted; local scrollback will return via a two-finger
+                    // swipe in a follow-up.)
+                    val gestureCallback = remember(activeTab, isMouseMode, mouseInputEnabled, mouseDragSelects, terminalRightClick) {
                         if (isMouseMode) object : org.connectbot.terminal.TerminalGestureCallback {
                             override fun onTap(col: Int, row: Int): Boolean {
                                 if (!mouseInputEnabled) return false
@@ -887,12 +887,8 @@ fun TerminalScreen(
                                 return true // suppress text selection
                             }
                             override fun onScroll(col: Int, row: Int, scrollUp: Boolean): Boolean {
-                                // Normal screen: don't claim the swipe — fall
-                                // through to Haven's local scrollback so history
-                                // stays reachable even with mouse reporting on. (#175)
-                                if (!isAltScreen) return false
                                 activeTab.sendInput(sgrMouseWheel(scrollUp, col + 1, row + 1))
-                                return true // alt screen: forward wheel to the app
+                                return true // forward wheel to the mouse-mode app (tmux/vim/less)
                             }
                             override fun onMouseDrag(
                                 col: Int,
