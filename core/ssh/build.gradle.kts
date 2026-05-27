@@ -41,6 +41,7 @@ dependencies {
     implementation(libs.bouncycastle)
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.android)
+    implementation(libs.lifecycle.process)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 

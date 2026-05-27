@@ -3,6 +3,9 @@ package sh.haven.core.ssh
 import android.util.Log
 import com.jcraft.jsch.ChannelSftp
 import com.jcraft.jsch.ChannelShell
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -423,6 +426,47 @@ class SshSessionManager @Inject constructor(
             if (!cfg.reconnectPolicy.autoReconnect) return@forEach
             if (!cfg.reconnectPolicy.onNetworkChange) return@forEach
             requestReconnect(id)
+        }
+    }
+
+    /**
+     * Probe every live SSH session and reconnect any whose socket died
+     * silently. Called on every return-to-foreground (see [SshConnectionService])
+     * because a backgrounded socket can be dropped by NAT/Doze without a
+     * default-network transport change — so neither the keepalive-timeout path
+     * nor the [NetworkMonitor] path fires, and the session sits frozen while
+     * still reporting CONNECTED.
+     *
+     * That CONNECTED status is exactly why we must probe first: [requestReconnect]
+     * no-ops on a CONNECTED session, so a failed probe is flipped to DISCONNECTED
+     * before being handed off. Probes run concurrently with a bounded per-probe
+     * timeout so one dead session doesn't serialize behind another's wait.
+     *
+     * Skips:
+     *  - non-CONNECTED sessions (CONNECTING/RECONNECTING are already in flight;
+     *    DISCONNECTED/ERROR are covered by [requestReconnect]/[requestReconnectAll]),
+     *  - headless tunnel sessions (e.g. the MCP reverse tunnel) — McpTunnelManager
+     *    owns those via its own watchdog and probing here would race its reconnect,
+     *  - sessions whose profile policy disables autoReconnect.
+     */
+    suspend fun probeAndReconnectStale(probeTimeoutMs: Long = 5_000L) {
+        val candidates = _sessions.value.values.filter {
+            it.status == SessionState.Status.CONNECTED &&
+                !it.headless &&
+                it.connectionConfig?.reconnectPolicy?.autoReconnect == true
+        }
+        if (candidates.isEmpty()) return
+        Log.d(TAG, "probeAndReconnectStale: probing ${candidates.size} live session(s)")
+        coroutineScope {
+            candidates.map { session ->
+                async {
+                    if (!session.client.isAlive(probeTimeoutMs)) {
+                        Log.d(TAG, "probeAndReconnectStale: ${session.sessionId} stale — reconnecting")
+                        updateStatus(session.sessionId, SessionState.Status.DISCONNECTED)
+                        requestReconnect(session.sessionId)
+                    }
+                }
+            }.awaitAll()
         }
     }
 

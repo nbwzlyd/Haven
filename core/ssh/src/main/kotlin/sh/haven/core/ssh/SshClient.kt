@@ -48,6 +48,40 @@ class SshClient : Closeable {
     internal val jschSession: Session?
         get() = session
 
+    /**
+     * Bounded request/response liveness check. Returns false on a null /
+     * disconnected session, on exception, or on timeout — the last case being
+     * the one that matters: a socket that died silently in the background (no
+     * RST reached us yet) still reports [isConnected] == true, so we force a
+     * real round-trip over the transport and treat a stalled reply as dead.
+     *
+     * Bounds the wait with JSch's own [com.jcraft.jsch.Channel.connect] timeout
+     * (the channel-open handshake needs a reply from the server) rather than an
+     * outer [withTimeoutOrNull]: the latter cannot interrupt the blocking exec
+     * I/O, so on a hard-dead socket detection slipped to ~20 s (verified on
+     * device) instead of the intended bound. We also do NOT read command output
+     * — the open confirmation alone proves the transport is answering — and we
+     * deliberately avoid [Session.sendKeepAliveMsg], which only enqueues a write
+     * and never waits for the reply, so it never observes a missing answer.
+     */
+    suspend fun isAlive(timeoutMs: Long = 5_000L): Boolean = withContext(Dispatchers.IO) {
+        val sess = session ?: return@withContext false
+        if (!sess.isConnected) return@withContext false
+        runCatching {
+            val channel = sess.openChannel("exec") as ChannelExec
+            channel.setCommand("true")
+            try {
+                // Waits up to timeoutMs for the server's channel-open
+                // confirmation; a silently-dead socket never answers and this
+                // throws once the bound elapses.
+                channel.connect(timeoutMs.toInt())
+                true
+            } finally {
+                try { channel.disconnect() } catch (_: Throwable) { /* best effort */ }
+            }
+        }.getOrDefault(false)
+    }
+
     /** Flatten a possibly-[ConnectionConfig.AuthMethod.Multi] into its leaves, in order. */
     private fun flattenAuth(m: ConnectionConfig.AuthMethod): List<ConnectionConfig.AuthMethod> =
         if (m is ConnectionConfig.AuthMethod.Multi) m.methods.flatMap(::flattenAuth) else listOf(m)

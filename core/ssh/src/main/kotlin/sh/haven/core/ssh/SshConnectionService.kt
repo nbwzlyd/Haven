@@ -11,6 +11,9 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +39,21 @@ class SshConnectionService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * On every return-to-foreground, probe live SSH sessions and reconnect any
+     * whose socket died silently in the background. Without this, a session
+     * dropped by NAT/Doze (no transport change, so [NetworkMonitor] is quiet)
+     * stays frozen until JSch's keepalive eventually times out (~45 s, and that
+     * timer is itself suspended during Doze). [addObserver] also delivers an
+     * immediate onStart when the app is already foreground — harmless, since the
+     * probe is cheap and idempotent.
+     */
+    private val foregroundObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            serviceScope.launch { sessionManager.probeAndReconnectStale() }
+        }
+    }
+
     companion object {
         const val CHANNEL_ID = "haven_connection"
         const val NOTIFICATION_ID = 1
@@ -54,6 +72,9 @@ class SshConnectionService : Service() {
         super.onCreate()
         createNotificationChannel()
         networkMonitor.start()
+        // Service.onCreate runs on the main thread, where ProcessLifecycleOwner
+        // observers must be added.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundObserver)
         serviceScope.launch {
             networkMonitor.events
                 .debounce(2_000) // network changes fire rapidly during handoff
@@ -99,6 +120,7 @@ class SshConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(foregroundObserver)
         networkMonitor.stop()
         serviceScope.cancel()
         super.onDestroy()

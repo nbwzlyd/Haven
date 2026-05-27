@@ -1,8 +1,11 @@
 package sh.haven.core.ssh
 
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -504,6 +507,111 @@ class SshSessionManagerTest {
             "expected RECONNECTING or DISCONNECTED, got $status",
             status == SshSessionManager.SessionState.Status.RECONNECTING ||
                 status == SshSessionManager.SessionState.Status.DISCONNECTED,
+        )
+    }
+
+    // --- Foreground liveness probe (#186 follow-up: reconnect after background) ---
+
+    private fun connectedSession(
+        client: SshClient,
+        headless: Boolean = false,
+        autoReconnect: Boolean = true,
+    ): String {
+        val sid = manager.registerSession("p1", "S1", client, headless = headless)
+        manager.storeConnectionConfig(
+            sessionId = sid,
+            config = configWithPolicy(autoReconnect = autoReconnect),
+            sessionMgr = SessionManager.NONE,
+        )
+        manager.updateStatus(sid, SshSessionManager.SessionState.Status.CONNECTED)
+        return sid
+    }
+
+    @Test
+    fun `probeAndReconnectStale leaves a live CONNECTED session untouched`() {
+        val client = mockk<SshClient>(relaxed = true)
+        coEvery { client.isAlive(any()) } returns true
+        val sid = connectedSession(client)
+
+        runBlocking { manager.probeAndReconnectStale() }
+
+        coVerify { client.isAlive(any()) }
+        assertEquals(
+            SshSessionManager.SessionState.Status.CONNECTED,
+            manager.getSession(sid)!!.status,
+        )
+    }
+
+    @Test
+    fun `probeAndReconnectStale reconnects a CONNECTED session whose probe fails`() {
+        val client = mockk<SshClient>(relaxed = true)
+        coEvery { client.isAlive(any()) } returns false
+        // Keep the subsequent reconnect attempt from doing real I/O.
+        every { client.connectBlocking(any(), any(), any()) } throws RuntimeException("offline")
+        val sid = connectedSession(client)
+
+        runBlocking { manager.probeAndReconnectStale() }
+
+        coVerify { client.isAlive(any()) }
+        // A dead probe must move the session off CONNECTED so requestReconnect
+        // (which no-ops on CONNECTED) can take it. It is now DISCONNECTED or, if
+        // the ioExecutor already picked it up, RECONNECTING.
+        val status = manager.getSession(sid)!!.status
+        assertTrue(
+            "expected DISCONNECTED or RECONNECTING, got $status",
+            status == SshSessionManager.SessionState.Status.DISCONNECTED ||
+                status == SshSessionManager.SessionState.Status.RECONNECTING,
+        )
+    }
+
+    @Test
+    fun `probeAndReconnectStale skips headless tunnel sessions`() {
+        val client = mockk<SshClient>(relaxed = true)
+        coEvery { client.isAlive(any()) } returns false
+        val sid = connectedSession(client, headless = true)
+
+        runBlocking { manager.probeAndReconnectStale() }
+
+        // McpTunnelManager's own watchdog owns headless sessions — never probe.
+        coVerify(exactly = 0) { client.isAlive(any()) }
+        assertEquals(
+            SshSessionManager.SessionState.Status.CONNECTED,
+            manager.getSession(sid)!!.status,
+        )
+    }
+
+    @Test
+    fun `probeAndReconnectStale skips sessions whose policy disables autoReconnect`() {
+        val client = mockk<SshClient>(relaxed = true)
+        coEvery { client.isAlive(any()) } returns false
+        val sid = connectedSession(client, autoReconnect = false)
+
+        runBlocking { manager.probeAndReconnectStale() }
+
+        coVerify(exactly = 0) { client.isAlive(any()) }
+        assertEquals(
+            SshSessionManager.SessionState.Status.CONNECTED,
+            manager.getSession(sid)!!.status,
+        )
+    }
+
+    @Test
+    fun `probeAndReconnectStale ignores non-CONNECTED sessions`() {
+        val client = mockk<SshClient>(relaxed = true)
+        coEvery { client.isAlive(any()) } returns false
+        val sid = manager.registerSession("p1", "S1", client) // stays CONNECTING
+        manager.storeConnectionConfig(
+            sessionId = sid,
+            config = configWithPolicy(autoReconnect = true),
+            sessionMgr = SessionManager.NONE,
+        )
+
+        runBlocking { manager.probeAndReconnectStale() }
+
+        coVerify(exactly = 0) { client.isAlive(any()) }
+        assertEquals(
+            SshSessionManager.SessionState.Status.CONNECTING,
+            manager.getSession(sid)!!.status,
         )
     }
 
