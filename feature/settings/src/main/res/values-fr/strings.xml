@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">Détecte un débit inférieur à ~1 Mbit/s après quelques secondes et propose une reconnexion en 256 couleurs en un geste. Désactivé masque l\'invite.</string>
     <string name="settings_bandwidth_suggest_title">Suggérer 256 couleurs sur les liens VNC lents</string>
-    <string name="settings_drag_select_subtitle">Transmet appui+déplacement+relâchement à tmux/zellij pour que la sélection s\'étende sur toute la vue via l\'historique du serveur distant. Désactivé, le glissement fait défiler le serveur distant (comportement hérité).</string>
-    <string name="settings_drag_select_title">Glisser pour sélectionner en mode souris TUI</string>
     <string name="settings_section_about">À propos</string>
     <string name="settings_section_advanced">Avancé</string>
     <string name="settings_section_appearance">Apparence</string>

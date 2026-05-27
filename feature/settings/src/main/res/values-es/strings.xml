@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">Detecta un rendimiento inferior a ~1 Mbps tras unos segundos y ofrece reconectar con 256 colores con un toque. Desactivado silencia el aviso.</string>
     <string name="settings_bandwidth_suggest_title">Sugerir 256 colores en conexiones VNC lentas</string>
-    <string name="settings_drag_select_subtitle">Reenvía pulsar+mover+soltar a tmux/zellij para que la selección se extienda por toda la vista mediante el propio historial del remoto. Si está desactivado, arrastrar desplaza el remoto (comportamiento heredado).</string>
-    <string name="settings_drag_select_title">Arrastrar para seleccionar en modo ratón TUI</string>
     <string name="settings_section_about">Acerca de</string>
     <string name="settings_section_advanced">Avanzado</string>
     <string name="settings_section_appearance">Apariencia</string>

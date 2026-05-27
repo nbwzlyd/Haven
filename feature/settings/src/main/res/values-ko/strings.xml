@@ -206,8 +206,6 @@
     <string name="settings_section_advanced">고급</string>
     <string name="settings_section_backup">백업</string>
     <string name="settings_section_about">정보</string>
-    <string name="settings_drag_select_title">TUI 마우스 모드에서 드래그 선택</string>
-    <string name="settings_drag_select_subtitle">원격 자체 스크롤백을 통해 선택이 뷰포트 전체로 확장되도록 press+motion+release를 tmux/zellij에 전달합니다. 끄면 드래그가 원격을 스크롤합니다(레거시 동작).</string>
     <string name="settings_show_terminal_tab_bar_title">터미널 탭 표시줄 표시</string>
     <string name="settings_show_terminal_tab_bar_subtitle">터미널 위에 세션 탭을 표시합니다</string>
     <string name="settings_touchpad_input_title">터치패드 입력</string>

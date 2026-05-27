@@ -147,7 +147,6 @@ fun TerminalScreen(
     showCopyOutputButton: Boolean = false,
     keepScreenOnInTerminal: Boolean = false,
     mouseInputEnabled: Boolean = true,
-    mouseDragSelects: Boolean = true,
     terminalRightClick: Boolean = false,
     tapToPositionCursorOnPrompt: Boolean = false,
     allowStandardKeyboard: Boolean = false,
@@ -863,15 +862,18 @@ fun TerminalScreen(
                     val isMouseMode by activeTab.mouseMode.collectAsState()
                     val isBracketPaste by activeTab.bracketPasteMode.collectAsState()
 
-                    // Build gesture callback when mouse mode is active.
-                    // Taps and long-presses are gated by mouseInputEnabled;
-                    // the scroll wheel forwards to the app whenever it has
-                    // requested mouse mode, so tmux/vim/less copy-mode scroll
-                    // works. (A normal-screen-only carve-out for local
-                    // scrollback was tried in #175 but broke tmux scrollback —
-                    // reverted; local scrollback will return via a two-finger
-                    // swipe in a follow-up.)
-                    val gestureCallback = remember(activeTab, isMouseMode, mouseInputEnabled, mouseDragSelects, terminalRightClick) {
+                    // Build gesture callback when mouse mode is active. Gesture
+                    // routing follows the mode (#186):
+                    //  • one-finger swipe → onScroll → wheel → scrolls the pane
+                    //  • long-press (haptic) then drag → onMouseDrag → the
+                    //    multiplexer's own pane-aware copy-mode selection
+                    //  • long-press release → right-click iff terminalRightClick;
+                    //    otherwise it just arms the copy-mode drag above
+                    // Taps/long-press/drag are gated by mouseInputEnabled; the
+                    // scroll wheel forwards whenever the app requested mouse mode.
+                    // Haven's local scrollback and row-based selection are reached
+                    // with a two-finger swipe / tap-and-hold in non-mouse-mode.
+                    val gestureCallback = remember(activeTab, isMouseMode, mouseInputEnabled, terminalRightClick) {
                         if (isMouseMode) object : org.connectbot.terminal.TerminalGestureCallback {
                             override fun onTap(col: Int, row: Int): Boolean {
                                 if (!mouseInputEnabled) return false
@@ -880,11 +882,14 @@ fun TerminalScreen(
                                 return true
                             }
                             override fun onLongPress(col: Int, row: Int): Boolean {
+                                // Returning false arms the copy-mode drag (the
+                                // default); only a right-click is a discrete action
+                                // that consumes the long-press.
                                 if (!mouseInputEnabled) return false
-                                if (!terminalRightClick) return false // allow text selection instead
+                                if (!terminalRightClick) return false
                                 activeTab.sendInput(sgrMouseButton(2, col + 1, row + 1, true))
                                 activeTab.sendInput(sgrMouseButton(2, col + 1, row + 1, false))
-                                return true // suppress text selection
+                                return true // right-click handled — ignore the trailing drag
                             }
                             override fun onScroll(col: Int, row: Int, scrollUp: Boolean): Boolean {
                                 activeTab.sendInput(sgrMouseWheel(scrollUp, col + 1, row + 1))
@@ -895,7 +900,7 @@ fun TerminalScreen(
                                 row: Int,
                                 phase: org.connectbot.terminal.MouseDragPhase,
                             ): Boolean {
-                                if (!mouseInputEnabled || !mouseDragSelects) return false
+                                if (!mouseInputEnabled) return false
                                 when (phase) {
                                     org.connectbot.terminal.MouseDragPhase.Start ->
                                         activeTab.sendInput(sgrMouseButton(0, col + 1, row + 1, true))

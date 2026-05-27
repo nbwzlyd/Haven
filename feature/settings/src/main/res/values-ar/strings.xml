@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">يكتشف معدل نقل أقل من ~1 ميجابت/ثانية بعد بضع ثوانٍ ويعرض إعادة الاتصال بـ 256 لونًا بنقرة واحدة. إيقاف التشغيل يلغي الإشعار.</string>
     <string name="settings_bandwidth_suggest_title">اقتراح 256 لونًا على اتصالات VNC البطيئة</string>
-    <string name="settings_drag_select_subtitle">يمرر الضغط والحركة والإفلات إلى tmux/zellij بحيث يمتد التحديد عبر منطقة العرض من خلال سجل التمرير الخاص بالجهاز البعيد. عند الإيقاف، يؤدي السحب إلى تمرير الجهاز البعيد (السلوك القديم).</string>
-    <string name="settings_drag_select_title">السحب للتحديد في وضع ماوس TUI</string>
     <string name="settings_section_about">حول التطبيق</string>
     <string name="settings_section_advanced">متقدم</string>
     <string name="settings_section_appearance">المظهر</string>

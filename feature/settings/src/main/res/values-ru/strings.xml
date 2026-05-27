@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">Обнаруживает пропускную способность ниже ~1 Мбит/с через несколько секунд и предлагает переподключение с 256 цветами одним касанием. Выключено — подсказка не показывается.</string>
     <string name="settings_bandwidth_suggest_title">Предлагать 256 цветов на медленных VNC-соединениях</string>
-    <string name="settings_drag_select_subtitle">Передаёт нажатие+движение+отпускание в tmux/zellij, чтобы выделение расширялось за пределы экрана через собственную историю удалённого узла. Когда выключено, перетаскивание прокручивает удалённый узел (прежнее поведение).</string>
-    <string name="settings_drag_select_title">Перетаскивание для выделения в режиме мыши TUI</string>
     <string name="settings_section_about">О приложении</string>
     <string name="settings_section_advanced">Дополнительно</string>
     <string name="settings_section_appearance">Оформление</string>

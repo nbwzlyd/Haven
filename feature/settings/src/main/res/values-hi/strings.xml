@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">कुछ सेकंड बाद ~1 Mbps से कम थ्रूपुट का पता लगाता है और 256 रंगों पर एक-टैप पुनः कनेक्ट का सुझाव देता है। बंद करने पर संकेत नहीं दिखता।</string>
     <string name="settings_bandwidth_suggest_title">धीमे VNC लिंक पर 256 रंग सुझाएँ</string>
-    <string name="settings_drag_select_subtitle">tmux/zellij को दबाना+हिलाना+छोड़ना अग्रेषित करता है ताकि चयन रिमोट के अपने स्क्रॉलबैक के माध्यम से व्यूपोर्ट से आगे बढ़े। बंद होने पर, खींचने से रिमोट स्क्रॉल होता है (पुराना व्यवहार)।</string>
-    <string name="settings_drag_select_title">TUI माउस मोड में खींचकर चयन करें</string>
     <string name="settings_section_about">ऐप के बारे में</string>
     <string name="settings_section_advanced">उन्नत</string>
     <string name="settings_section_appearance">दिखावट</string>

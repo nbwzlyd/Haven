@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">Erkennt einen Durchsatz unter ~1 Mbit/s nach wenigen Sekunden und bietet eine Neuverbindung mit 256 Farben per Tastendruck an. Aus blendet die Meldung aus.</string>
     <string name="settings_bandwidth_suggest_title">256 Farben bei langsamen VNC-Verbindungen vorschlagen</string>
-    <string name="settings_drag_select_subtitle">Leitet Drücken+Bewegen+Loslassen an tmux/zellij weiter, sodass sich die Auswahl über den eigenen Verlauf der Gegenstelle hinweg über den sichtbaren Bereich erstreckt. Wenn aus, scrollt das Ziehen die Gegenstelle (altes Verhalten).</string>
-    <string name="settings_drag_select_title">Ziehen zum Auswählen im TUI-Mausmodus</string>
     <string name="settings_section_about">Über die App</string>
     <string name="settings_section_advanced">Erweitert</string>
     <string name="settings_section_appearance">Darstellung</string>

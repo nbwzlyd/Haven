@@ -278,8 +278,6 @@ fun HavenNavHost(
         .collectAsState(initial = false)
     val mouseInputEnabled by preferencesRepository.mouseInputEnabled
         .collectAsState(initial = true)
-    val mouseDragSelects by preferencesRepository.mouseDragSelects
-        .collectAsState(initial = true)
     val terminalRightClick by preferencesRepository.terminalRightClick
         .collectAsState(initial = false)
     val tapToPositionCursorOnPrompt by preferencesRepository.terminalTapToPositionCursor
@@ -459,7 +457,6 @@ fun HavenNavHost(
                         showCopyOutputButton = showCopyOutputButton,
                         keepScreenOnInTerminal = keepScreenOnInTerminal,
                         mouseInputEnabled = mouseInputEnabled,
-                        mouseDragSelects = mouseDragSelects,
                         terminalRightClick = terminalRightClick,
                         tapToPositionCursorOnPrompt = tapToPositionCursorOnPrompt,
                         allowStandardKeyboard = allowStandardKeyboard,

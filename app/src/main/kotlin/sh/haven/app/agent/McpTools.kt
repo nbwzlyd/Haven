@@ -642,7 +642,7 @@ internal class McpTools(
         ) { _ -> readClipboard() },
 
         "get_preference" to ToolHandler(
-            description = "Read a Haven user preference by key. Whitelisted keys: terminal_scrollback_rows, terminal_tap_to_position_cursor, terminal_font_size, terminal_color_scheme, mouse_input_enabled, mouse_drag_selects, terminal_right_click, mcp_tunnel_endpoint_profile_id, mcp_wireguard_enabled, usb_guest_exposure_enabled. Returns { key, value } where value's type follows the preference's type (int / boolean / string).",
+            description = "Read a Haven user preference by key. Whitelisted keys: terminal_scrollback_rows, terminal_tap_to_position_cursor, terminal_font_size, terminal_color_scheme, mouse_input_enabled, terminal_right_click, mcp_tunnel_endpoint_profile_id, mcp_wireguard_enabled, usb_guest_exposure_enabled. Returns { key, value } where value's type follows the preference's type (int / boolean / string).",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -851,7 +851,7 @@ internal class McpTools(
         ) { args -> writeClipboard(args) },
 
         "set_preference" to ToolHandler(
-            description = "Write a Haven user preference. Whitelisted keys (and their types): terminal_scrollback_rows (int 100..25000), terminal_tap_to_position_cursor (bool), terminal_font_size (int 8..32), mouse_input_enabled (bool), mouse_drag_selects (bool), terminal_right_click (bool), mcp_tunnel_endpoint_profile_id (string SSH profile id, empty to clear), mcp_wireguard_enabled (bool), usb_guest_exposure_enabled (bool — master gate for usb_attach_to_guest). Returns { key, value }.",
+            description = "Write a Haven user preference. Whitelisted keys (and their types): terminal_scrollback_rows (int 100..25000), terminal_tap_to_position_cursor (bool), terminal_font_size (int 8..32), mouse_input_enabled (bool), terminal_right_click (bool), mcp_tunnel_endpoint_profile_id (string SSH profile id, empty to clear), mcp_wireguard_enabled (bool), usb_guest_exposure_enabled (bool — master gate for usb_attach_to_guest). Returns { key, value }.",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -3600,7 +3600,6 @@ internal class McpTools(
         "terminal_tap_to_position_cursor",
         "terminal_font_size",
         "mouse_input_enabled",
-        "mouse_drag_selects",
         "terminal_right_click",
         // SSH profile id the MCP server tunnels its loopback listener back
         // to (dedicated headless `-R`). Empty string clears it. See
@@ -3625,7 +3624,6 @@ internal class McpTools(
             "terminal_tap_to_position_cursor" -> preferencesRepository.terminalTapToPositionCursor.first()
             "terminal_font_size" -> preferencesRepository.terminalFontSize.first()
             "mouse_input_enabled" -> preferencesRepository.mouseInputEnabled.first()
-            "mouse_drag_selects" -> preferencesRepository.mouseDragSelects.first()
             "terminal_right_click" -> preferencesRepository.terminalRightClick.first()
             "mcp_tunnel_endpoint_profile_id" -> preferencesRepository.mcpTunnelEndpointProfileId.first() ?: ""
             "mcp_wireguard_enabled" -> preferencesRepository.mcpWireguardEnabled.first()
@@ -3668,7 +3666,6 @@ internal class McpTools(
             "terminal_font_size" -> preferencesRepository.setTerminalFontSize(coerceInt())
             "terminal_tap_to_position_cursor" -> preferencesRepository.setTerminalTapToPositionCursor(coerceBool())
             "mouse_input_enabled" -> preferencesRepository.setMouseInputEnabled(coerceBool())
-            "mouse_drag_selects" -> preferencesRepository.setMouseDragSelects(coerceBool())
             "terminal_right_click" -> preferencesRepository.setTerminalRightClick(coerceBool())
             "mcp_tunnel_endpoint_profile_id" ->
                 preferencesRepository.setMcpTunnelEndpointProfileId((rawValue as? String)?.ifBlank { null })

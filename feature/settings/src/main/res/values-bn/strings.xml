@@ -213,8 +213,6 @@
 
     <string name="settings_bandwidth_suggest_subtitle">কয়েক সেকেন্ড পরে ~1 Mbps-এর নিচে থ্রুপুট শনাক্ত করে এবং 256 রঙে এক-ট্যাপে পুনঃসংযোগের প্রস্তাব দেয়। বন্ধ করলে প্রম্পট দেখানো হয় না।</string>
     <string name="settings_bandwidth_suggest_title">ধীর VNC সংযোগে 256 রঙ প্রস্তাব করুন</string>
-    <string name="settings_drag_select_subtitle">tmux/zellij-এ চাপ+নড়াচড়া+ছেড়ে দেওয়া ফরওয়ার্ড করে যাতে রিমোটের নিজস্ব স্ক্রলব্যাকের মাধ্যমে নির্বাচন ভিউপোর্ট ছাড়িয়ে বিস্তৃত হয়। বন্ধ থাকলে, টেনে আনলে রিমোট স্ক্রল হয় (পুরোনো আচরণ)।</string>
-    <string name="settings_drag_select_title">TUI মাউস মোডে টেনে নির্বাচন করুন</string>
     <string name="settings_section_about">সম্পর্কে</string>
     <string name="settings_section_advanced">উন্নত</string>
     <string name="settings_section_appearance">চেহারা</string>
