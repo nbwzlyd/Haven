@@ -90,6 +90,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import sh.haven.core.ui.KeyEventInterceptor
@@ -406,7 +407,15 @@ fun TerminalScreen(
         }
     }
 
-    // Show/hide keyboard when this tab becomes active/inactive
+    // Show/hide keyboard when this tab becomes active/inactive.
+    // When this tab goes inactive (user navigated to Desktop / Connections /
+    // SFTP / etc.), also clear focus: the terminal's hidden ImeInputView
+    // keeps focus across pager pages otherwise, so when another screen later
+    // shows the soft keyboard the IME re-binds to the terminal and the
+    // user's keystrokes appear in the terminal instead of the visible
+    // screen (e.g. typing on a VNC/Wayland desktop tab landed in the
+    // terminal).
+    val focusManager = LocalFocusManager.current
     LaunchedEffect(isActive) {
         val window = (view.context as? Activity)?.window ?: return@LaunchedEffect
         val controller = WindowCompat.getInsetsController(window, view)
@@ -414,6 +423,7 @@ fun TerminalScreen(
             controller.show(WindowInsetsCompat.Type.ime())
         } else if (!isActive) {
             controller.hide(WindowInsetsCompat.Type.ime())
+            focusManager.clearFocus(force = true)
         }
     }
 
