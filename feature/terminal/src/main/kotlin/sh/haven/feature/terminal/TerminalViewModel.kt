@@ -279,6 +279,7 @@ class TerminalViewModel @Inject constructor(
     private val hostKeyVerifier: HostKeyVerifier,
     private val preferencesRepository: UserPreferencesRepository,
     private val connectionRepository: sh.haven.core.data.repository.ConnectionRepository,
+    private val tunnelResolver: sh.haven.core.tunnel.TunnelResolver,
     private val agentUiCommandBus: sh.haven.core.data.agent.AgentUiCommandBus,
     /**
      * Coordinator for the paperclip "attach" flow — see
@@ -1855,8 +1856,16 @@ class TerminalViewModel @Inject constructor(
             val client = SshClient()
             val sessionId = sessionManager.registerSession(profileId, label, client)
             try {
+                // Route through the profile's tunnel (WireGuard / Tailscale) or
+                // legacy SOCKS/HTTP proxy, same as the primary connect path
+                // (ConnectionsViewModel). Without this a second tab on a
+                // tunnel-routed profile dials the host directly and times out
+                // ("Session not connected") because the host is only reachable
+                // through the tunnel.
+                val proxy = connectionRepository.getById(profileId)
+                    ?.let { tunnelResolver.havenProxy(it) }
                 val hostKeyEntry = withContext(Dispatchers.IO) {
-                    client.connect(config)
+                    client.connect(config, proxy = proxy)
                 }
 
                 // Silent TOFU: auto-accept new hosts, reject key changes
@@ -1979,7 +1988,10 @@ class TerminalViewModel @Inject constructor(
             val client = SshClient()
             val sessionId = sessionManager.registerSession(profileId, label, client)
             try {
-                val hostKeyEntry = withContext(Dispatchers.IO) { client.connect(config) }
+                // Route through the profile's tunnel / proxy (see addSshTabForProfile).
+                val proxy = connectionRepository.getById(profileId)
+                    ?.let { tunnelResolver.havenProxy(it) }
+                val hostKeyEntry = withContext(Dispatchers.IO) { client.connect(config, proxy = proxy) }
                 when (val hkResult = hostKeyVerifier.verify(hostKeyEntry)) {
                     is HostKeyResult.Trusted -> {}
                     is HostKeyResult.NewHost -> hostKeyVerifier.accept(hkResult.entry)

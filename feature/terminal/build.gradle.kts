@@ -35,6 +35,7 @@ dependencies {
     implementation(project(":core:toolbar"))
     implementation(project(":core:data"))
     implementation(project(":core:ssh"))
+    implementation(project(":core:tunnel"))
     implementation(project(":core:reticulum"))
     implementation(project(":core:mosh"))
     implementation(project(":core:et"))
