@@ -71,6 +71,26 @@ object WaylandSocketHelper {
                 shizukuBinderAlive = false
             }
 
+            // The binder-received warm-up no-ops if permission isn't granted
+            // yet (newProcess would throw), and the sticky callback won't
+            // re-fire — so a grant *after* bind would otherwise leave the
+            // first real call to eat the cold-start. Catch the grant here and
+            // retry. onRequestPermissionResult(requestCode, grantResult).
+            registerListener(
+                clazz = clazz,
+                addMethodName = "addRequestPermissionResultListener",
+                listenerIface = "rikka.shizuku.Shizuku\$OnRequestPermissionResultListener",
+                callbackMethod = "onRequestPermissionResult",
+            ) { args ->
+                val granted = (args?.getOrNull(1) as? Int) ==
+                    android.content.pm.PackageManager.PERMISSION_GRANTED
+                Log.d(TAG, "Shizuku permission result: granted=$granted")
+                if (granted) {
+                    shizukuBinderAlive = true
+                    warmUpShizukuShell()
+                }
+            }
+
             shizukuListenersRegistered = true
             Log.d(TAG, "Shizuku binder listeners registered (alive=$shizukuBinderAlive)")
         } catch (e: Exception) {
@@ -135,7 +155,7 @@ object WaylandSocketHelper {
         addMethodName: String,
         listenerIface: String,
         callbackMethod: String,
-        crossinline onInvoked: () -> Unit,
+        crossinline onInvoked: (callbackArgs: Array<out Any?>?) -> Unit,
     ) {
         val iface = Class.forName(listenerIface)
         val proxy = java.lang.reflect.Proxy.newProxyInstance(
@@ -147,7 +167,7 @@ object WaylandSocketHelper {
                 "hashCode" -> System.identityHashCode(self)
                 "toString" -> "HavenShizukuListener(${iface.simpleName})"
                 callbackMethod -> {
-                    onInvoked()
+                    onInvoked(args)
                     null
                 }
                 else -> null
