@@ -33,6 +33,7 @@ class ReticulumSessionManager @Inject constructor(
         val status: Status,
         val destinationHash: String,
         val reticulumSession: ReticulumSession? = null,
+        val sftpSession: sh.haven.core.reticulum.sftp.ReticulumSftpSession? = null,
     ) {
         enum class Status { CONNECTING, CONNECTED, DISCONNECTED, ERROR }
     }
@@ -183,6 +184,7 @@ class ReticulumSessionManager @Inject constructor(
         scope.launch {
             try {
                 session.reticulumSession?.close()
+                session.sftpSession?.close()
             } catch (e: Exception) {
                 Log.e(TAG, "tearDown failed for $sessionId", e)
             }
@@ -197,6 +199,7 @@ class ReticulumSessionManager @Inject constructor(
             toRemove.forEach { session ->
                 try {
                     session.reticulumSession?.close()
+                    session.sftpSession?.close()
                 } catch (e: Exception) {
                     Log.e(TAG, "tearDown failed for ${session.sessionId}", e)
                 }
@@ -213,6 +216,7 @@ class ReticulumSessionManager @Inject constructor(
             snapshot.forEach { session ->
                 try {
                     session.reticulumSession?.close()
+                    session.sftpSession?.close()
                 } catch (e: Exception) {
                     Log.e(TAG, "tearDown failed for ${session.sessionId}", e)
                 }
@@ -227,6 +231,32 @@ class ReticulumSessionManager @Inject constructor(
         _sessions.value.values.any {
             it.profileId == profileId && it.status == SessionState.Status.CONNECTED
         }
+
+    /**
+     * Lazily open (or reuse) a persistent SFTP session for [profileId] over the
+     * profile's connected Link, mirroring SSH's `openSftpForProfile`. The actual
+     * `sftp-server` Link + handshake happen on first file op, not here. Returns
+     * null if the profile has no CONNECTED session. Synchronized so concurrent
+     * resolvers don't double-open.
+     */
+    @Synchronized
+    fun openSftpSessionForProfile(
+        profileId: String,
+        sftpServerPath: String,
+    ): sh.haven.core.reticulum.sftp.ReticulumSftpSession? {
+        val state = _sessions.value.values.firstOrNull {
+            it.profileId == profileId && it.status == SessionState.Status.CONNECTED
+        } ?: return null
+        state.sftpSession?.let { return it }
+        val session = sh.haven.core.reticulum.sftp.ReticulumSftpSession(
+            transport, state.destinationHash, sftpServerPath,
+        )
+        _sessions.update { map ->
+            val cur = map[state.sessionId] ?: return@update map
+            map + (state.sessionId to cur.copy(sftpSession = session))
+        }
+        return session
+    }
 
     fun getProfileStatus(profileId: String): SessionState.Status? {
         val statuses = _sessions.value.values
