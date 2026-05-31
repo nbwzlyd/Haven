@@ -3,6 +3,7 @@ package sh.haven.feature.terminal
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -64,7 +65,7 @@ class TerminalViewModelTest {
 
     @Test
     fun `syncSessions with no sessions produces no tabs`() {
-        viewModel.syncSessions()
+        runBlocking { viewModel.syncSessions() }
         assertEquals(0, viewModel.tabs.value.size)
     }
 
@@ -74,7 +75,7 @@ class TerminalViewModelTest {
         sessionManager.registerSession("profile1", "Server", client)
         // Status is CONNECTING, no shell channel
 
-        viewModel.syncSessions()
+        runBlocking { viewModel.syncSessions() }
         assertEquals(0, viewModel.tabs.value.size)
     }
 
@@ -85,7 +86,7 @@ class TerminalViewModelTest {
         sessionManager.updateStatus(sessionId, SshSessionManager.SessionState.Status.CONNECTED)
         // No shell channel attached
 
-        viewModel.syncSessions()
+        runBlocking { viewModel.syncSessions() }
         assertEquals(0, viewModel.tabs.value.size)
     }
 

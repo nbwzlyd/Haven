@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.connectbot.terminal.TerminalEmulator
@@ -869,12 +868,27 @@ class TerminalViewModel @Inject constructor(
      * Sync tabs with session manager state.
      * Creates emulator + terminal session for new CONNECTED sessions.
      */
-    fun syncSessions() {
+    suspend fun syncSessions() {
         val sshSessions = sessionManager.sessions.value
         val rnsSessions = reticulumSessionManager.sessions.value
         val moshSessions = moshSessionManager.sessions.value
         val etSessions = etSessionManager.sessions.value
         val localSessions = localSessionManager.sessions.value
+
+        // Resolve the display config (color scheme, alt-screen, color tag) for
+        // every active session's profile in one off-main batch. The per-branch
+        // tab setup below reads from this map instead of a per-session blocking
+        // Room+Keystore lookup — syncSessions runs on the main thread from the
+        // session collectors, where runBlocking was an ANR source. (#208 #14)
+        val profilesById = withContext(Dispatchers.IO) {
+            buildSet {
+                sshSessions.values.forEach { add(it.profileId) }
+                rnsSessions.values.forEach { add(it.profileId) }
+                moshSessions.values.forEach { add(it.profileId) }
+                etSessions.values.forEach { add(it.profileId) }
+                localSessions.values.forEach { add(it.profileId) }
+            }.associateWith { connectionRepository.getById(it) }
+        }
 
         // Find SSH sessions that are connected or reconnecting
         val activeSshIds = sshSessions.values
@@ -1005,7 +1019,7 @@ class TerminalViewModel @Inject constructor(
             ) ?: continue
 
             val coalescer = InputCoalescer { data -> termSession.sendToSsh(data) }
-            val sshProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+            val sshProfile = profilesById[session.profileId]
             val scheme = effectiveColorScheme(sshProfile)
             val initialScheme = initialEmulatorScheme(scheme)
             emulator = TerminalEmulatorFactory.create(
@@ -1099,7 +1113,7 @@ class TerminalViewModel @Inject constructor(
             ) ?: continue
 
             val rnsCoalescer = InputCoalescer { data -> rnsSession.sendInput(data) }
-            val rnsProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+            val rnsProfile = profilesById[session.profileId]
             val rnsScheme = effectiveColorScheme(rnsProfile)
             val rnsInitialScheme = initialEmulatorScheme(rnsScheme)
             emulator = TerminalEmulatorFactory.create(
@@ -1154,7 +1168,7 @@ class TerminalViewModel @Inject constructor(
             if (!moshSessionManager.isReadyForTerminal(sessionId)) continue
 
             val session = moshSessions[sessionId] ?: continue
-            val moshProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+            val moshProfile = profilesById[session.profileId]
             val tabLabel = generateTabLabel(session.label, session.profileId, currentTabs, sessionName = moshProfile?.lastSessionName)
 
             lateinit var emulator: TerminalEmulator
@@ -1259,7 +1273,7 @@ class TerminalViewModel @Inject constructor(
             if (!etSessionManager.isReadyForTerminal(sessionId)) continue
 
             val session = etSessions[sessionId] ?: continue
-            val etProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+            val etProfile = profilesById[session.profileId]
             val tabLabel = generateTabLabel(session.label, session.profileId, currentTabs, sessionName = etProfile?.lastSessionName)
 
             lateinit var emulator: TerminalEmulator
@@ -1381,7 +1395,7 @@ class TerminalViewModel @Inject constructor(
             if (existingHeadless != null && agentRegistryEntry != null) {
                 val session = localSessions[sessionId] ?: continue
                 val tabLabel = generateTabLabel(session.label, session.profileId, currentTabs)
-                val localProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+                val localProfile = profilesById[session.profileId]
                 val localScheme = effectiveColorScheme(localProfile)
                 // The adopted headless session's real onDataReceived belongs
                 // to the agent transport and can't be teed here, so OSC /
@@ -1458,7 +1472,7 @@ class TerminalViewModel @Inject constructor(
             ) ?: continue
 
             val localCoalescer = InputCoalescer { data -> localSession.sendInput(data) }
-            val localProfile = runBlocking(Dispatchers.IO) { connectionRepository.getById(session.profileId) }
+            val localProfile = profilesById[session.profileId]
             val localScheme = effectiveColorScheme(localProfile)
             val localInitialScheme = initialEmulatorScheme(localScheme)
             emulator = TerminalEmulatorFactory.create(
@@ -1691,7 +1705,9 @@ class TerminalViewModel @Inject constructor(
             reticulumSessionManager.removeSession(sessionId)
         }
         trackedSessionIds.remove(sessionId)
-        syncSessions()
+        // Removal is synchronous; the tab reconciliation (now suspending, since
+        // it resolves profiles off-main) runs in a launched coroutine. (#208 #14)
+        viewModelScope.launch { syncSessions() }
     }
 
     private fun removeAllForProfileAndSync(profileId: String) {
@@ -1703,7 +1719,7 @@ class TerminalViewModel @Inject constructor(
         trackedSessionIds.removeAll(
             _tabs.value.filter { it.profileId == profileId }.map { it.sessionId }.toSet()
         )
-        syncSessions()
+        viewModelScope.launch { syncSessions() }
     }
 
     /**
