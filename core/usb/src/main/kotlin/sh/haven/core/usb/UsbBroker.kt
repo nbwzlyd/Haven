@@ -172,7 +172,16 @@ class UsbBroker @Inject constructor(
     /** Open [deviceName] (requesting permission first if needed) and cache the connection. */
     suspend fun openDevice(deviceName: String): UsbDeviceInfo {
         val device = findDevice(deviceName)
-        open[deviceName]?.let { return describe(device) }
+        open[deviceName]?.let {
+            // A cached connection is only valid while permission is still held.
+            // A detach/replug (or a revoked grant) silently invalidates the
+            // connection while leaving our handle behind — after which every
+            // later openDevice would be a no-op that can never re-prompt, and
+            // transfers fail with rc=-1. Evict the stale handle and re-open.
+            if (usbManager.hasPermission(device)) return describe(device)
+            Log.d(TAG, "Evicting stale handle for $deviceName (permission lost — likely re-enumerated)")
+            closeDevice(deviceName)
+        }
         if (!requestPermission(deviceName)) throw IOException("USB permission denied for $deviceName")
         val connection = usbManager.openDevice(device)
             ?: throw IOException("Failed to open USB device $deviceName")

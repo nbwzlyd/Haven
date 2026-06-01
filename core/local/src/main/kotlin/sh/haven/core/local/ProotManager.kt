@@ -1656,6 +1656,7 @@ chmod +x /root/.vnc/xstartup""")
     /**
      * Stage the haven-usb guest artifacts into the active rootfs:
      *  - `/usr/local/bin/haven-usb-probe`        (Slice-2 reachability probe)
+     *  - `/usr/local/bin/haven-usb-serial`       (CDC-ACM serial<->PTY bridge)
      *  - `/usr/local/lib/haven/libhaven_usb.so`  (Slice-3 LD_PRELOAD/DllMap shim)
      *  - `/usr/local/bin/haven-hidraw-test`      (Slice-3 verification harness)
      *
@@ -1683,6 +1684,7 @@ chmod +x /root/.vnc/xstartup""")
         }
 
         val probeOk = copy("haven-usb-probe", File(activeRootfsDir, "usr/local/bin/haven-usb-probe"), true)
+        copy("haven-usb-serial", File(activeRootfsDir, "usr/local/bin/haven-usb-serial"), true)
         copy("libhaven_usb.so", File(activeRootfsDir, "usr/local/lib/haven/libhaven_usb.so"), false)
         copy("haven-hidraw-test", File(activeRootfsDir, "usr/local/bin/haven-hidraw-test"), true)
         return if (probeOk) "/usr/local/bin/haven-usb-probe" else null
@@ -1690,6 +1692,9 @@ chmod +x /root/.vnc/xstartup""")
 
     /** Absolute in-guest path of the LD_PRELOAD/DllMap shim staged by [stageHavenUsbArtifacts]. */
     val havenUsbShimGuestPath: String get() = "/usr/local/lib/haven/libhaven_usb.so"
+
+    /** Absolute in-guest path of the CDC-ACM serial<->PTY bridge staged by [stageHavenUsbArtifacts]. */
+    val havenUsbSerialGuestPath: String get() = "/usr/local/bin/haven-usb-serial"
 
     fun migrateDesktopConfigs(de: DesktopEnvironment) {
         // Refresh the shim on every start so an app update's newer shim

@@ -1233,7 +1233,7 @@ internal class McpTools(
         ) { args -> usbBulkTransfer(args) },
 
         "usb_attach_to_guest" to ToolHandler(
-            description = "Expose a USB device to the proot Linux guest: opens it (requesting permission if needed) and binds the haven-usb proxy on an abstract LocalSocket the guest can reach, then stages the haven-usb-probe binary into the guest. Returns the socketName, the in-guest probePath, and a probeCommand you can run via run_in_proot to verify reachability. deviceName is optional when exactly one device is attached. This is the entry point for the guest-side USB shim (later slices wire LD_PRELOAD/DllMap to this socket).",
+            description = "Expose a USB device to the proot Linux guest: opens it (requesting permission if needed) and binds the haven-usb proxy on an abstract LocalSocket the guest can reach, then stages the haven-usb-probe binary into the guest. Returns the socketName, the in-guest probePath, and a probeCommand you can run via run_in_proot to verify reachability. For a CDC-ACM serial device it also returns serialBridgeCommand (the haven-usb-serial PTY bridge) so unmodified serial apps (e.g. LIRC's lircd/mode2) can open it as /dev/pts/N. deviceName is optional when exactly one device is attached. This is the entry point for the guest-side USB shim (LD_PRELOAD/DllMap for HID, a PTY bridge for serial).",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -4930,6 +4930,15 @@ internal class McpTools(
         val socketName = usbProxyServer.start(deviceName)
         val probePath = localSessionManager.prootManager.stageHavenUsbArtifacts()
         val shimPath = localSessionManager.prootManager.havenUsbShimGuestPath
+        // CDC-ACM serial bridge: for a serial device, point off-the-shelf serial
+        // apps at a real guest PTY backed by the brokered device (no kernel
+        // cdc_acm, no LD_PRELOAD) via the staged haven-usb-serial helper.
+        val serialPath = localSessionManager.prootManager.havenUsbSerialGuestPath
+        val cdcData = info.interfaces.firstOrNull { it.interfaceClass == 10 }
+        val bulkOutEp = cdcData?.endpoints?.firstOrNull { it.type == "bulk" && it.direction == "out" }?.address
+        val bulkInEp = cdcData?.endpoints?.firstOrNull { it.type == "bulk" && it.direction == "in" }?.address
+        val isCdcAcm = info.interfaces.any { it.interfaceClass == 2 && it.interfaceSubclass == 2 } &&
+            bulkOutEp != null && bulkInEp != null
         JSONObject().apply {
             put("device", usbDeviceJson(info))
             put("socketName", socketName)
@@ -4937,6 +4946,17 @@ internal class McpTools(
             put("probePath", probePath ?: JSONObject.NULL)
             if (probePath != null) put("probeCommand", probePath)
             put("shimPath", shimPath)
+            if (isCdcAcm && bulkOutEp != null && bulkInEp != null) {
+                val cmd = "%s 0x%02x 0x%02x".format(serialPath, bulkOutEp, bulkInEp)
+                put("cdcAcm", true)
+                put("serialBridgeCommand", cmd)
+                put(
+                    "serialBridgeNote",
+                    "CDC-ACM serial device. Run `$cmd` via run_in_proot(background:true); it prints " +
+                        "`pts: /dev/pts/N`. Point an unmodified serial app at that path, e.g. " +
+                        "`lircd --driver irtoy --device /dev/pts/N` or `mode2 --driver irtoy --device /dev/pts/N`.",
+                )
+            }
             // For a NATIVE HID app, prepend this so its /dev/hidraw* opens are
             // routed to the brokered device (no real node, no root).
             put("ldPreloadWrapper", "LD_PRELOAD=$shimPath")

@@ -4,6 +4,7 @@
 #
 # Artifacts:
 #   haven-usb-probe   — Slice-2 reachability gate (standalone, static)
+#   haven-usb-serial  — CDC-ACM serial <-> PTY bridge (standalone, static)
 #   libhaven_usb.so   — Slice-3 LD_PRELOAD/DllMap hidraw shim (shared)
 #   haven-hidraw-test — Slice-3 verification harness (dynamic, for LD_PRELOAD)
 #
@@ -41,6 +42,13 @@ build_one() {
     "$cc" -O2 -D_FORTIFY_SOURCE=0 -Wall -Wextra -static \
         -o "$out_dir/haven-usb-probe" "$SRC_DIR/haven-usb-probe.c"
     command -v "$strip" >/dev/null && "$strip" "$out_dir/haven-usb-probe" || true
+
+    echo "=== haven-usb-serial for $abi ==="
+    # Static so it runs in any rootfs. Full-duplex PTY<->proxy bridge for
+    # CDC-ACM serial devices (off-the-shelf serial apps, e.g. LIRC).
+    "$cc" -O2 -D_FORTIFY_SOURCE=0 -Wall -Wextra -static -pthread \
+        -o "$out_dir/haven-usb-serial" "$SRC_DIR/haven-usb-serial.c"
+    command -v "$strip" >/dev/null && "$strip" "$out_dir/haven-usb-serial" || true
 
     echo "=== libhaven_usb.so for $abi ==="
     # Shared, fortify off (loads under both glibc and musl). Links pthread + dl.
