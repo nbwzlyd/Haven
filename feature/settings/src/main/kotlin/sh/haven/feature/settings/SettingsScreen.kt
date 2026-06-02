@@ -191,6 +191,7 @@ fun SettingsScreen(
     var showProotInstallLog by remember { mutableStateOf(false) }
     var showAgentActivity by remember { mutableStateOf(false) }
     var showFontUrlDialog by remember { mutableStateOf(false) }
+    var showRecommendedFontsDialog by remember { mutableStateOf(false) }
     // Lifted to SettingsScreen scope so a dialog's confirm handler can
     // dismiss the dialog AND still complete its async work + show the
     // result Toast. Earlier these scopes lived inside the `if (showX)`
@@ -330,6 +331,27 @@ fun SettingsScreen(
             onDismiss = { showFontUrlDialog = false },
         )
     }
+    if (showRecommendedFontsDialog) {
+        RecommendedFontsDialog(
+            onPick = { name, url ->
+                showRecommendedFontsDialog = false
+                Toast.makeText(context, "Installing $name…", Toast.LENGTH_SHORT).show()
+                settingsScope.launch {
+                    when (val r = viewModel.installTerminalFontFromUrl(url)) {
+                        is sh.haven.core.data.font.TerminalFontInstaller.Result.Success ->
+                            Toast.makeText(
+                                context,
+                                "$name installed (${r.bytesInstalled / 1024} KiB)",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        is sh.haven.core.data.font.TerminalFontInstaller.Result.Failure ->
+                            Toast.makeText(context, r.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            },
+            onDismiss = { showRecommendedFontsDialog = false },
+        )
+    }
     // Collapsible settings sections — all collapsed by default so the screen
     // opens compact and users expand only what they need.
     val settingsExpanded = remember {
@@ -430,6 +452,12 @@ fun SettingsScreen(
                     // application/octet-stream; we revalidate post-import.
                     fontImportLauncher.launch(arrayOf("font/ttf", "font/otf", "application/octet-stream", "*/*"))
                 },
+            )
+            SettingsItem(
+                icon = Icons.Filled.FontDownload,
+                title = "Recommended fonts",
+                subtitle = "One-tap install: Source Code Pro, JetBrains Mono, Hack, Inconsolata",
+                onClick = { showRecommendedFontsDialog = true },
             )
             SettingsItem(
                 icon = Icons.Filled.CloudDownload,
@@ -2839,6 +2867,57 @@ private fun FontFromUrlDialog(
                 enabled = canSubmit,
             ) { Text(stringResource(R.string.common_install)) }
         },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+        },
+    )
+}
+
+/**
+ * Curated monospace coding fonts with verified direct-TTF URLs — jsDelivr
+ * mirrors of each project's GitHub repo, pinned to a stable ref (each was
+ * checked to return `200 font/ttf`). One-tap installs go through the same
+ * [TerminalFontInstaller] download/validate path as the URL dialog and the
+ * agent's `set_terminal_font_from_url` tool. Source Code Pro resolves #147;
+ * the rest are common requests.
+ */
+private val RECOMMENDED_TERMINAL_FONTS: List<Pair<String, String>> = listOf(
+    "Source Code Pro" to "https://cdn.jsdelivr.net/gh/adobe-fonts/source-code-pro@release/TTF/SourceCodePro-Regular.ttf",
+    "JetBrains Mono" to "https://cdn.jsdelivr.net/gh/JetBrains/JetBrainsMono@master/fonts/ttf/JetBrainsMono-Regular.ttf",
+    "Hack" to "https://cdn.jsdelivr.net/gh/source-foundry/Hack@master/build/ttf/Hack-Regular.ttf",
+    "Inconsolata" to "https://cdn.jsdelivr.net/gh/googlefonts/Inconsolata@main/fonts/ttf/Inconsolata-Regular.ttf",
+)
+
+/**
+ * One-tap picker for a few popular coding fonts (#147). Each entry hands its
+ * verified TTF URL to [onPick], which installs it via the shared installer.
+ */
+@Composable
+private fun RecommendedFontsDialog(
+    onPick: (name: String, url: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Recommended fonts") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Tap to download and apply a popular monospace coding font.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                RECOMMENDED_TERMINAL_FONTS.forEach { (name, url) ->
+                    TextButton(
+                        onClick = { onPick(name, url) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(name, modifier = Modifier.fillMaxWidth()) }
+                }
+            }
+        },
+        // No confirm button — picking a font is the action.
+        confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
