@@ -224,8 +224,28 @@ class McpServer @Inject constructor(
 
     /** Synthetic profile id under which the MCP listener holds a WG tunnel. */
     private val wireguardProfileId = "mcp-wg-listener"
+    /**
+     * Synthetic profile id under which the MCP server actively keeps the
+     * configured carrier WG tunnel UP (distinct from [wireguardProfileId],
+     * which merely binds whatever WG tunnel is live). Holding this refcount
+     * is what makes the WG-exposed endpoint survive app restart /
+     * re-foreground instead of waiting for some other profile to dial it.
+     */
+    private val wireguardCarrierProfileId = "mcp-wg-carrier"
     private var wireguardJob: Job? = null
     @Volatile private var wireguardListener: sh.haven.core.tunnel.TunneledServerSocket? = null
+
+    /**
+     * URL the endpoint is reachable at on the device's Wi-Fi/LAN address
+     * (`http://<lan-ip>:<port>/mcp`), or null when the LAN bind is off or no
+     * suitable interface is up. A same-network client can point here
+     * directly — no WireGuard, no reverse forward.
+     */
+    private val _lanEndpointUrl = MutableStateFlow<String?>(null)
+    val lanEndpointUrl: StateFlow<String?> = _lanEndpointUrl.asStateFlow()
+
+    private var lanServerSocket: ServerSocket? = null
+    private var lanServerThread: Thread? = null
 
     /**
      * Standard MCP server registration JSON for the Haven endpoint.
@@ -345,9 +365,69 @@ class McpServer @Inject constructor(
         if (runBlocking { preferencesRepository.mcpWireguardEnabled.first() }) {
             startWireguardBinderLocked()
         }
+        // Optionally also bind the device's Wi-Fi/LAN address for direct
+        // same-network reach.
+        if (runBlocking { preferencesRepository.mcpLanBindEnabled.first() }) {
+            startLanBinderLocked()
+        }
     }
 
     override fun close() = stop()
+
+    /**
+     * Enable/disable the LAN-exposed listener at runtime (driven by the
+     * `mcpLanBindEnabled` preference). No-op when the server isn't running —
+     * [start] picks up the current pref value itself.
+     */
+    fun setLanBindEnabled(enabled: Boolean) = synchronized(lifecycleLock) {
+        if (!isRunning) return@synchronized
+        if (enabled) startLanBinderLocked() else stopLanBinderLocked()
+    }
+
+    /** Must hold [lifecycleLock]. Idempotent. */
+    private fun startLanBinderLocked() {
+        if (lanServerThread?.isAlive == true) return
+        val boundPort = port
+        val lanSs = bindLan(boundPort)
+        if (lanSs == null) {
+            // No suitable interface up right now (e.g. mobile-only). The
+            // HavenApp connectivity observer re-invokes this on the next
+            // network change, so this is a soft skip, not an error.
+            Log.i(TAG, "MCP LAN bind requested but no Wi-Fi/LAN address is up; will retry on network change")
+            return
+        }
+        lanServerSocket = lanSs
+        _lanEndpointUrl.value = "http://${lanSs.inetAddress.hostAddress}:$boundPort/mcp"
+        Log.i(TAG, "MCP also listening on LAN ${_lanEndpointUrl.value}")
+        lanServerThread = thread(name = "mcp-http-lan", isDaemon = true) {
+            while (isRunning && !lanSs.isClosed) {
+                try {
+                    val client = lanSs.accept()
+                    thread(name = "mcp-client-lan", isDaemon = true) {
+                        try {
+                            handleClient(client)
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "LAN worker crashed: ${e.message}")
+                            try { client.close() } catch (_: Exception) {}
+                        }
+                    }
+                } catch (_: IOException) {
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "LAN accept failed: ${e.message}")
+                }
+            }
+            Log.i(TAG, "MCP LAN accept loop exited")
+        }
+    }
+
+    /** Must hold [lifecycleLock]. Idempotent. */
+    private fun stopLanBinderLocked() {
+        try { lanServerSocket?.close() } catch (_: Exception) {}
+        lanServerSocket = null
+        lanServerThread = null
+        _lanEndpointUrl.value = null
+    }
 
     /**
      * Enable/disable the WireGuard-exposed listener at runtime (driven by
@@ -365,6 +445,28 @@ class McpServer @Inject constructor(
         val boundPort = port
         wireguardJob = scope.launch {
             while (isActive) {
+                // If a carrier tunnel is configured, actively bring it UP
+                // (acquire is get-or-create) so the WG-exposed endpoint comes
+                // back on its own after an app restart / re-foreground rather
+                // than waiting for some other profile to dial it. Idempotent;
+                // re-run each iteration so a dropped carrier is re-established.
+                // Zero-config fallback: when no carrier is explicitly set but
+                // the user has exactly one WireGuard tunnel config, treat that
+                // as the carrier. With several WG configs we stay attach-only
+                // (no guessing) until the pref names one.
+                val carrierId = preferencesRepository.mcpWireguardTunnelConfigId.first()
+                    ?: runCatching {
+                        tunnelConfigRepository.getAll()
+                            .filter { it.type == "WIREGUARD" }
+                            .singleOrNull()?.id
+                    }.getOrNull()
+                if (!carrierId.isNullOrBlank()) {
+                    try {
+                        tunnelManager.acquire(carrierId, wireguardCarrierProfileId)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "MCP WG carrier acquire ($carrierId) failed: ${e.message}")
+                    }
+                }
                 // Bind on whichever WireGuard tunnel is currently up; holding
                 // it as a dependent keeps it alive while MCP is bound.
                 val tunnel = tunnelManager.acquireFirstWireguard(wireguardProfileId)
@@ -425,7 +527,13 @@ class McpServer @Inject constructor(
         try { wireguardListener?.close() } catch (_: Exception) {}
         wireguardListener = null
         _wireguardEndpointUrl.value = null
-        scope.launch { tunnelManager.release(wireguardProfileId) }
+        scope.launch {
+            tunnelManager.release(wireguardProfileId)
+            // Drop our active hold on the carrier tunnel too. If another
+            // profile still depends on it, it stays up; otherwise it's torn
+            // down (we were the only thing keeping it alive).
+            tunnelManager.release(wireguardCarrierProfileId)
+        }
     }
 
     fun stop() = synchronized(lifecycleLock) {
@@ -436,6 +544,7 @@ class McpServer @Inject constructor(
     private fun stopLocked() {
         isRunning = false
         stopWireguardBinderLocked()
+        stopLanBinderLocked()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
         serverThread = null
@@ -459,13 +568,11 @@ class McpServer @Inject constructor(
 
     // --- Socket binding ---
 
-    // Off-device reachability is provided by McpTunnelManager's dedicated
-    // SSH reverse tunnel. The roaming-proof follow-up is to also bind the
-    // listener on the stable wgbridge WireGuard interface address (a
-    // `bindWireguard()` sibling to this method, gated by an off-by-default
-    // pref + pairing token) so a WG-peer laptop reaches it directly with no
-    // reverse forward. Blocked on whether the gVisor netstack exposes TCP
-    // listen/accept — tracked in GlassHaven/Haven#176.
+    // Off-device reachability has three layers: McpTunnelManager's SSH
+    // reverse tunnel (roaming fallback), the WireGuard-tunnel netstack bind
+    // ([startWireguardBinderLocked], #176 — direct reach for a WG peer), and
+    // the LAN bind below ([bindLan] — direct reach for a same-network
+    // client). All share [handleConnection]'s pairing/consent gate.
     private fun bindLoopback(): ServerSocket {
         val loopback = InetAddress.getByName("127.0.0.1")
         // Try preferred ports first so a client that cached an endpoint
@@ -479,6 +586,51 @@ class McpServer @Inject constructor(
         }
         // All preferred ports busy — let the OS pick one
         return ServerSocket(0, 10, loopback).apply { reuseAddress = true }
+    }
+
+    /**
+     * Bind a real (kernel) [ServerSocket] on the device's Wi-Fi/LAN IPv4
+     * address at [boundPort], so a same-network client reaches the endpoint
+     * directly. Returns null when no suitable interface is up (e.g. mobile
+     * data only) — the caller treats that as a soft skip and retries on the
+     * next connectivity change.
+     *
+     * We pick a specific interface address rather than binding 0.0.0.0 so we
+     * never expose the endpoint on the mobile (rmnet) interface — only on
+     * Wi-Fi / Ethernet-style site-local networks the user is deliberately on.
+     */
+    private fun bindLan(boundPort: Int): ServerSocket? {
+        val addr = pickLanAddress() ?: return null
+        return try {
+            ServerSocket(boundPort, 10, addr).apply { reuseAddress = true }
+        } catch (e: IOException) {
+            Log.w(TAG, "LAN bind on ${addr.hostAddress}:$boundPort failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * The device's preferred Wi-Fi/LAN IPv4 address: an up, non-loopback,
+     * site-local IPv4 on a wlan/eth-style interface. Excludes mobile (rmnet)
+     * and tunnel (tun/wg/rmnet) interfaces so the LAN bind never lands on a
+     * carrier-facing address. Null when none is available.
+     */
+    private fun pickLanAddress(): InetAddress? {
+        return try {
+            java.net.NetworkInterface.getNetworkInterfaces().asSequence()
+                .filter { it.isUp && !it.isLoopback }
+                .filterNot { ni ->
+                    val n = ni.name.lowercase()
+                    n.startsWith("rmnet") || n.startsWith("tun") || n.startsWith("wg") ||
+                        n.startsWith("dummy") || n.startsWith("p2p")
+                }
+                .sortedBy { ni -> if (ni.name.lowercase().startsWith("wlan")) 0 else 1 }
+                .flatMap { it.inetAddresses.asSequence() }
+                .firstOrNull { a -> a is java.net.Inet4Address && !a.isLoopbackAddress && a.isSiteLocalAddress }
+        } catch (e: Exception) {
+            Log.w(TAG, "pickLanAddress failed: ${e.message}")
+            null
+        }
     }
 
     // --- HTTP + JSON-RPC handling ---

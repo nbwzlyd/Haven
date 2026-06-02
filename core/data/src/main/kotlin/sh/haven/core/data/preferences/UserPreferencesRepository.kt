@@ -115,6 +115,18 @@ class UserPreferencesRepository @Inject constructor(
     // across roams — no reverse forward). Off by default: a WG-reachable
     // listener is a wider surface than the loopback bind. See McpServer (#176).
     private val mcpWireguardEnabledKey = booleanPreferencesKey("mcp_wireguard_enabled")
+    // Bind the MCP listener on the device's Wi-Fi/LAN address too, so a
+    // same-network client reaches it directly (no WG, no reverse forward).
+    // Off by default — a LAN-reachable listener is a wider surface than
+    // loopback, though still gated by client pairing. See McpServer.
+    private val mcpLanBindEnabledKey = booleanPreferencesKey("mcp_lan_bind_enabled")
+    // Tunnel config id of the WireGuard tunnel to keep up as the MCP
+    // carrier. When set (and mcp_wireguard_enabled), the MCP server
+    // actively (re)connects this tunnel rather than passively attaching to
+    // whatever WG tunnel happens to be live — so the WG-exposed endpoint
+    // survives app restart / re-foreground. Empty/unset preserves the old
+    // attach-to-first-live behaviour.
+    private val mcpWireguardTunnelConfigIdKey = stringPreferencesKey("mcp_wireguard_tunnel_config_id")
 
     val biometricEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[biometricEnabledKey] ?: false
@@ -540,6 +552,37 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setMcpWireguardEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[mcpWireguardEnabledKey] = enabled
+        }
+    }
+
+    /**
+     * Whether the MCP listener also binds the device's Wi-Fi/LAN address
+     * (in addition to loopback), so a same-LAN client reaches it directly.
+     * Off by default. Reach stays gated by client pairing.
+     */
+    val mcpLanBindEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[mcpLanBindEnabledKey] ?: false
+    }
+
+    suspend fun setMcpLanBindEnabled(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[mcpLanBindEnabledKey] = enabled
+        }
+    }
+
+    /**
+     * Tunnel config id of the WireGuard tunnel to keep up as the MCP
+     * carrier, or null when unset (attach to whatever WG tunnel is live).
+     */
+    val mcpWireguardTunnelConfigId: Flow<String?> = dataStore.data.map { prefs ->
+        prefs[mcpWireguardTunnelConfigIdKey]?.ifBlank { null }
+    }
+
+    suspend fun setMcpWireguardTunnelConfigId(configId: String?) {
+        dataStore.edit { prefs ->
+            val v = configId?.ifBlank { null }
+            if (v == null) prefs.remove(mcpWireguardTunnelConfigIdKey)
+            else prefs[mcpWireguardTunnelConfigIdKey] = v
         }
     }
 

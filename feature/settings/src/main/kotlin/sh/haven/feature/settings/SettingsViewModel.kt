@@ -196,6 +196,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Whether the MCP server also binds the device's Wi-Fi/LAN address. */
+    val mcpLanBindEnabled: StateFlow<Boolean> = preferencesRepository.mcpLanBindEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun setMcpLanBindEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setMcpLanBindEnabled(enabled)
+        }
+    }
+
     val agentAllowFileRead: StateFlow<Boolean> = preferencesRepository.agentAllowFileRead
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 

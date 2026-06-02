@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.VpnLock
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.LockReset
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material.icons.filled.Reorder
@@ -866,6 +867,23 @@ fun SettingsScreen(
                 },
                 checked = mcpWireguardEnabled,
                 onCheckedChange = viewModel::setMcpWireguardEnabled,
+            )
+
+            // Also bind the device's Wi-Fi/LAN address so a same-network
+            // client reaches the endpoint directly (no WireGuard, no reverse
+            // forward). Off by default (wider surface than loopback, though
+            // still gated by client pairing).
+            val mcpLanBindEnabled by viewModel.mcpLanBindEnabled.collectAsState()
+            SettingsToggleItem(
+                icon = Icons.Filled.Wifi,
+                title = "Expose on Wi-Fi/LAN",
+                subtitle = if (mcpLanBindEnabled) {
+                    "Enabled — also reachable at <device-lan-ip>:8730 on the local network"
+                } else {
+                    "Disabled — turn on for direct reach from a device on the same Wi-Fi/LAN"
+                },
+                checked = mcpLanBindEnabled,
+                onCheckedChange = viewModel::setMcpLanBindEnabled,
             )
 
             // Endpoint URL is always the canonical port range start —
