@@ -657,14 +657,14 @@ internal class McpTools(
                 put("properties", JSONObject().apply {
                     put("sessionId", JSONObject().apply {
                         put("type", "string")
-                        put("description", "Active session ID (from list_sessions).")
+                        put("description", "Active session ID (from list_sessions). Optional — defaults to the sole open terminal session; required only when several are open.")
                     })
                     put("maxBytes", JSONObject().apply {
                         put("type", "integer")
                         put("description", "Maximum bytes to return. Default 16384, hard-capped at 262144.")
                     })
                 })
-                put("required", JSONArray().put("sessionId"))
+                put("required", JSONArray())
             },
             consentLevel = ConsentLevel.NEVER,
         ) { args -> readTerminalScrollback(args) },
@@ -676,7 +676,7 @@ internal class McpTools(
                 put("properties", JSONObject().apply {
                     put("sessionId", JSONObject().apply {
                         put("type", "string")
-                        put("description", "Active session ID (from list_sessions). Must have an attached terminal tab.")
+                        put("description", "Active session ID (from list_sessions). Optional — defaults to the sole open terminal session; required only when several are open. Must have an attached terminal tab.")
                     })
                     put("includeSemanticSegments", JSONObject().apply {
                         put("type", "boolean")
@@ -687,7 +687,7 @@ internal class McpTools(
                         put("description", "Maximum number of visible-screen lines to include from the top. Default returns all visible rows. Cursor and dimensions are always present regardless.")
                     })
                 })
-                put("required", JSONArray().put("sessionId"))
+                put("required", JSONArray())
             },
             consentLevel = ConsentLevel.NEVER,
         ) { args -> readTerminalSnapshot(args) },
@@ -859,10 +859,10 @@ internal class McpTools(
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
-                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID (from list_sessions). Must have an attached terminal.") })
+                    put("sessionId", JSONObject().apply { put("type", "string"); put("description", "Active session ID (from list_sessions). Optional — defaults to the sole open terminal session; required only when several are open. Must have an attached terminal.") })
                     put("text", JSONObject().apply { put("type", "string"); put("description", "UTF-8 text to send. Include trailing \\n to execute.") })
                 })
-                put("required", JSONArray().put("sessionId").put("text"))
+                put("required", JSONArray().put("text"))
             },
             // Once the user approves the agent typing into a session, per-call
             // re-approval is friction without added safety — the session is
@@ -2842,13 +2842,31 @@ internal class McpTools(
         val mcpPort = mcpPortProvider()
         val sessionId = explicitSessionId
             ?: sshSessionManager.findRemoteForwardSession(mcpPort)
-            ?: throw McpError(
-                -32603,
-                "No SSH session carries the MCP reverse tunnel on port $mcpPort; " +
-                    "pass sessionId explicitly (list_sessions). For the auto-detection default " +
-                    "to work, an SSH profile must have the MCP reverse-tunnel toggle on and be " +
-                    "connected; for unrelated sessions just pass sessionId.",
-            )
+            ?: run {
+                // No SSH session carries the MCP tunnel. Fall back to the sole
+                // open terminal so a direct-HTTP agent (no SSH -R) can still
+                // drive a single terminal; with none open, give an actionable
+                // "connect a profile first" error rather than the opaque
+                // tunnel message that left agents looping (#213).
+                val ids = terminalSessionRegistry.sessions.value.keys
+                when (ids.size) {
+                    0 -> throw McpError(
+                        -32603,
+                        "No terminal session is connected. Connect a profile first " +
+                            "(list_connections then connect_profile, or open a Local Shell), " +
+                            "then retry — or pass an explicit sessionId from list_sessions.",
+                    )
+                    1 -> ids.first()
+                    else -> throw McpError(
+                        -32603,
+                        "No SSH session carries the MCP reverse tunnel on port $mcpPort, and " +
+                            "several terminal sessions are open (${ids.joinToString(", ")}). " +
+                            "Pass sessionId explicitly (list_sessions). For the auto-detection " +
+                            "default to work, an SSH profile must have the MCP reverse-tunnel " +
+                            "toggle on and be connected.",
+                    )
+                }
+            }
         val promptPattern = args.optString("promptPattern").ifEmpty { DEFAULT_PROMPT_PATTERN }
         val timeoutSeconds = args.optInt("timeoutSeconds", 60).coerceIn(1, 600)
         // submitKey: see [DEFAULT_SUBMIT_KEY] for the rationale on `\r`
@@ -3206,9 +3224,7 @@ internal class McpTools(
     }
 
     private fun focusTerminalSession(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId").ifEmpty {
-            throw McpError(-32602, "Missing required argument: sessionId")
-        }
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val command = sh.haven.core.data.agent.AgentUiCommand.FocusTerminalSession(sessionId)
         val delivered = agentUiCommandBus.emit(command)
         return JSONObject().apply {
@@ -3534,9 +3550,7 @@ internal class McpTools(
     }
 
     private fun readTerminalScrollback(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId").ifEmpty {
-            throw McpError(-32602, "Missing required argument: sessionId")
-        }
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val requested = args.optInt("maxBytes", 16384)
         val capped = requested.coerceIn(1, 256 * 1024)
         // sessionId can come from either the SSH or the local-shell
@@ -3785,6 +3799,36 @@ internal class McpTools(
 
     // --- Terminal snapshot / selection / clipboard / preference helpers ---
 
+    /**
+     * Resolve which terminal session a terminal-driving tool should act on.
+     *
+     * An explicit `sessionId` is used verbatim (a stale id then surfaces the
+     * registry's own "no registered terminal tab" error downstream). When the
+     * caller omits it, default to the sole open terminal session. With none
+     * open, throw an **actionable** error telling the agent to connect a
+     * profile first — rather than the opaque "missing sessionId" result that
+     * left an external agent looping with no feedback (#213). With several
+     * open, ask the caller to pick one.
+     */
+    private fun resolveTerminalSessionId(explicit: String): String {
+        if (explicit.isNotEmpty()) return explicit
+        val ids = terminalSessionRegistry.sessions.value.keys
+        return when (ids.size) {
+            0 -> throw McpError(
+                -32603,
+                "No terminal session is connected. Connect a profile first " +
+                    "(list_connections then connect_profile, or open a Local Shell), " +
+                    "then retry — or pass an explicit sessionId from list_sessions.",
+            )
+            1 -> ids.first()
+            else -> throw McpError(
+                -32602,
+                "Several terminal sessions are open (${ids.joinToString(", ")}); " +
+                    "pass sessionId to pick one (see list_sessions).",
+            )
+        }
+    }
+
     private fun requireRegistryEntry(sessionId: String): sh.haven.feature.terminal.agent.TerminalSessionRegistry.Entry {
         if (sessionId.isEmpty()) throw McpError(-32602, "Missing required argument: sessionId")
         return terminalSessionRegistry.get(sessionId)
@@ -3792,7 +3836,7 @@ internal class McpTools(
     }
 
     private fun readTerminalSnapshot(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val includeSegs = args.optBoolean("includeSemanticSegments", false)
         val maxLines = if (args.has("maxLines")) args.optInt("maxLines", Int.MAX_VALUE) else Int.MAX_VALUE
@@ -3860,7 +3904,7 @@ internal class McpTools(
     }
 
     private fun getSelection(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val controller = entry.selectionController
             ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController — the tab may not be the foreground tab")
@@ -4036,7 +4080,7 @@ internal class McpTools(
     }
 
     private fun startSelection(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val controller = entry.selectionController
             ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
@@ -4067,7 +4111,7 @@ internal class McpTools(
     }
 
     private fun extendSelection(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val controller = entry.selectionController
             ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
@@ -4087,7 +4131,7 @@ internal class McpTools(
     }
 
     private fun dragSelectionTo(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val selection = entry.selectionController
             ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
@@ -4164,7 +4208,7 @@ internal class McpTools(
     }
 
     private fun copySelection(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val controller = entry.selectionController
             ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active SelectionController")
@@ -4176,7 +4220,7 @@ internal class McpTools(
     }
 
     private fun tapTerminal(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val row = args.optInt("row", -1).also { if (it < 0) throw McpError(-32602, "row must be >= 0") }
         val col = args.optInt("col", -1).also { if (it < 0) throw McpError(-32602, "col must be >= 0") }
@@ -4199,7 +4243,7 @@ internal class McpTools(
     }
 
     private fun scrollTerminal(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId")
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val scrollController = entry.scrollController
             ?: throw McpError(-32603, "Terminal tab for session $sessionId has no active ScrollController")
@@ -4212,9 +4256,7 @@ internal class McpTools(
     }
 
     private fun sendTerminalInput(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId").ifEmpty {
-            throw McpError(-32602, "Missing required argument: sessionId")
-        }
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val text = args.optString("text", "")
         if (text.isEmpty()) {
             throw McpError(-32602, "Missing required argument: text")
@@ -4250,9 +4292,7 @@ internal class McpTools(
     }
 
     private fun feedTerminalOutput(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId").ifEmpty {
-            throw McpError(-32602, "Missing required argument: sessionId")
-        }
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val feed = entry.feedOutput
             ?: throw McpError(
@@ -4286,9 +4326,7 @@ internal class McpTools(
     }
 
     private fun dragTerminal(args: JSONObject): JSONObject {
-        val sessionId = args.optString("sessionId").ifEmpty {
-            throw McpError(-32602, "Missing required argument: sessionId")
-        }
+        val sessionId = resolveTerminalSessionId(args.optString("sessionId"))
         val entry = requireRegistryEntry(sessionId)
         val injector = entry.gestureInjector
             ?: throw McpError(
