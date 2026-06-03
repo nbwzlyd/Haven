@@ -231,6 +231,20 @@ fun SettingsScreen(
 
     val context = LocalContext.current
 
+    // Strings hoisted out of event callbacks / coroutines below: the Compose
+    // LocalContextGetResourceValueCall lint forbids context.getString() at those
+    // sites, and stringResource() (a @Composable) can't be called inside them.
+    // Format-arg strings hoist the raw template; callers apply String.format().
+    val fontSetToastTmpl = stringResource(R.string.settings_terminal_font_set_toast)
+    val fontDecodeFailedMsg = stringResource(R.string.settings_terminal_font_decode_failed_toast)
+    val fontInstalledToastTmpl = stringResource(R.string.settings_font_installed_toast)
+    val fontInstallingToastTmpl = stringResource(R.string.settings_font_installing_toast)
+    val fontNamedInstalledToastTmpl = stringResource(R.string.settings_font_named_installed_toast)
+    val fontResetMsg = stringResource(R.string.settings_terminal_font_reset_toast)
+    val mcpUrlCopiedMsg = stringResource(R.string.settings_mcp_url_copied_toast)
+    val mcpConfigCopiedMsg = stringResource(R.string.settings_mcp_config_copied_toast)
+    val agentAllowsClearedMsg = stringResource(R.string.settings_agent_allows_cleared_toast)
+
     // SAF launchers for backup/restore
     var pendingPassword by remember { mutableStateOf("") }
     val exportLauncher = rememberLauncherForActivityResult(
@@ -268,11 +282,11 @@ fun SettingsScreen(
             fontImportScope.launch {
                 val path = viewModel.importCustomTerminalFont(uri, displayName)
                 if (path != null) {
-                    Toast.makeText(context, context.getString(R.string.settings_terminal_font_set_toast, displayName), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, String.format(fontSetToastTmpl, displayName), Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.settings_terminal_font_decode_failed_toast),
+                        fontDecodeFailedMsg,
                         Toast.LENGTH_LONG,
                     ).show()
                 }
@@ -320,7 +334,7 @@ fun SettingsScreen(
                         is sh.haven.core.data.font.TerminalFontInstaller.Result.Success ->
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.settings_font_installed_toast, (r.bytesInstalled / 1024).toInt()),
+                                String.format(fontInstalledToastTmpl, (r.bytesInstalled / 1024).toInt()),
                                 Toast.LENGTH_SHORT,
                             ).show()
                         is sh.haven.core.data.font.TerminalFontInstaller.Result.Failure ->
@@ -335,13 +349,13 @@ fun SettingsScreen(
         RecommendedFontsDialog(
             onPick = { name, url ->
                 showRecommendedFontsDialog = false
-                Toast.makeText(context, context.getString(R.string.settings_font_installing_toast, name), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, String.format(fontInstallingToastTmpl, name), Toast.LENGTH_SHORT).show()
                 settingsScope.launch {
                     when (val r = viewModel.installTerminalFontFromUrl(url)) {
                         is sh.haven.core.data.font.TerminalFontInstaller.Result.Success ->
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.settings_font_named_installed_toast, name, (r.bytesInstalled / 1024).toInt()),
+                                String.format(fontNamedInstalledToastTmpl, name, (r.bytesInstalled / 1024).toInt()),
                                 Toast.LENGTH_SHORT,
                             ).show()
                         is sh.haven.core.data.font.TerminalFontInstaller.Result.Failure ->
@@ -472,7 +486,7 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_reset_font_subtitle),
                     onClick = {
                         viewModel.clearCustomTerminalFont()
-                        Toast.makeText(context, context.getString(R.string.settings_terminal_font_reset_toast), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, fontResetMsg, Toast.LENGTH_SHORT).show()
                     },
                 )
             }
@@ -706,6 +720,10 @@ fun SettingsScreen(
             val context = LocalContext.current
             val helper = sh.haven.core.local.WaylandSocketHelper
             var capturing by remember { mutableStateOf(helper.isCapturingLogcat) }
+            // Hoisted out of the onClick callback (lint LocalContextGetResourceValueCall).
+            val logcatSavedMsg = stringResource(R.string.settings_logcat_saved_toast)
+            val logcatStartedMsg = stringResource(R.string.settings_logcat_started_toast)
+            val logcatStartFailedMsg = stringResource(R.string.settings_logcat_start_failed_toast)
             SettingsItem(
                 icon = Icons.Filled.BugReport,
                 title = stringResource(R.string.settings_logcat_capture_title),
@@ -717,13 +735,13 @@ fun SettingsScreen(
                     if (capturing) {
                         helper.stopLogcatCapture()
                         capturing = false
-                        Toast.makeText(context, context.getString(R.string.settings_logcat_saved_toast), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, logcatSavedMsg, Toast.LENGTH_SHORT).show()
                     } else {
                         capturing = helper.startLogcatCapture()
                         if (capturing) {
-                            Toast.makeText(context, context.getString(R.string.settings_logcat_started_toast), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, logcatStartedMsg, Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(context, context.getString(R.string.settings_logcat_start_failed_toast), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, logcatStartFailedMsg, Toast.LENGTH_SHORT).show()
                         }
                     }
                 },
@@ -937,7 +955,7 @@ fun SettingsScreen(
                     clipboard?.setPrimaryClip(
                         android.content.ClipData.newPlainText("Haven MCP endpoint", endpointUrl),
                     )
-                    Toast.makeText(context, context.getString(R.string.settings_mcp_url_copied_toast), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, mcpUrlCopiedMsg, Toast.LENGTH_SHORT).show()
                 },
             )
             SettingsItem(
@@ -953,7 +971,7 @@ fun SettingsScreen(
                             mcpConfigJson,
                         ),
                     )
-                    Toast.makeText(context, context.getString(R.string.settings_mcp_config_copied_toast), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, mcpConfigCopiedMsg, Toast.LENGTH_SHORT).show()
                 },
             )
             SettingsItem(
@@ -984,7 +1002,7 @@ fun SettingsScreen(
                 subtitle = stringResource(R.string.settings_agent_forget_allows_subtitle),
                 onClick = {
                     viewModel.forgetMemoisedAgentAllows()
-                    Toast.makeText(context, context.getString(R.string.settings_agent_allows_cleared_toast), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, agentAllowsClearedMsg, Toast.LENGTH_SHORT).show()
                 },
             )
         }

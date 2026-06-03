@@ -75,6 +75,9 @@ fun AuditLogScreen(
     var expandedLogId by remember { mutableStateOf<Long?>(null) }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
+    // Hoisted out of the onShare lambda (LazyListScope, not @Composable) so the
+    // Compose LocalContextGetResourceValueCall lint isn't tripped at the call site.
+    val shareChooserTitle = stringResource(R.string.settings_audit_log_share_chooser)
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -156,7 +159,7 @@ fun AuditLogScreen(
                                 putExtra(android.content.Intent.EXTRA_SUBJECT, "Haven connection log: ${item.profileLabel}")
                                 putExtra(android.content.Intent.EXTRA_TEXT, text)
                             }
-                            context.startActivity(android.content.Intent.createChooser(intent, context.getString(R.string.settings_audit_log_share_chooser)))
+                            context.startActivity(android.content.Intent.createChooser(intent, shareChooserTitle))
                         },
                     )
                 }
