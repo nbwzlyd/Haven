@@ -182,22 +182,47 @@ fun HavenNavHost(
     fun pageOf(screen: Screen): Int = screens.indexOf(screen).coerceAtLeast(0)
     val coroutineScope = rememberCoroutineScope()
 
-    // Programmatic navigation target, applied reactively. `screens` is both
-    // dynamically filtered (Desktop/Terminal appear only once a session/profile
-    // exists) and user-reorderable, so scrolling eagerly with pageOf(...) at
-    // connect time can resolve to a stale index — pageOf returns 0 (often Files)
-    // when the target isn't in `screens` yet, so the pager landed on the wrong
-    // tab. Instead, record the desired Screen and scroll once it's actually
-    // present: adding the session/profile mutates `screens`, which re-fires this
-    // effect. No-op if the screen never appears.
-    var pendingScreenNav by remember { mutableStateOf<Screen?>(null) }
-    fun requestScreen(screen: Screen) { pendingScreenNav = screen }
-    LaunchedEffect(pendingScreenNav, screens) {
-        val target = pendingScreenNav ?: return@LaunchedEffect
-        val idx = screens.indexOf(target)
-        if (idx >= 0) {
-            pagerState.animateScrollToPage(idx)
-            pendingScreenNav = null
+    // SINGLE SOURCE OF TRUTH for which screen is shown. Render (the pager
+    // page), selection (nav-bar / rail highlight) and navigation
+    // (requestScreen) all derive from this one Screen value, so they can
+    // never drift apart. The previous design tracked position as a raw Int
+    // page index against a `screens` list that is both *filtered*
+    // (Desktop/Terminal/Keys appear only when relevant) and *user-reorderable*
+    // (drag-to-reorder persists an order) — when the set or order changed
+    // under it, the same Int aliased to a different screen, so tapping one
+    // tab could land on another and the highlight could disagree with the
+    // page. Anchoring to the Screen *identity* keeps the page locked to the
+    // selection across any set/order change.
+    //
+    // Initialised from the pager's restored page so a config-change / process
+    // restore starts aligned; the settle effect below keeps it in lockstep
+    // with manual swipes.
+    var selectedScreen by remember {
+        mutableStateOf(
+            screens.getOrNull(pagerState.currentPage) ?: screens.firstOrNull() ?: Screen.Connections,
+        )
+    }
+    fun requestScreen(screen: Screen) { selectedScreen = screen }
+    // RENDER follows SELECTION: re-scroll whenever the selection changes OR
+    // the available screens change (filter/reorder), so the visible page is
+    // always the selected Screen. Instant scroll (not animated) so a tap
+    // never double-jumps through intermediate pages. No-op when the screen
+    // isn't present yet (e.g. a tab still gated off, or a deep-link to
+    // Desktop before its first session) — adding it mutates `screens`, which
+    // re-fires this effect and lands the user there.
+    LaunchedEffect(selectedScreen, screens) {
+        val idx = screens.indexOf(selectedScreen)
+        if (idx >= 0 && idx != pagerState.currentPage) {
+            pagerState.scrollToPage(idx)
+        }
+    }
+    // Manual swipes feed the source of truth: when the pager *settles* on a
+    // page, adopt that screen as the selection. Keyed on settledPage only
+    // (not `screens`) so a pending requestScreen to a not-yet-present tab is
+    // never clobbered by a screens-list change before the scroll lands.
+    LaunchedEffect(pagerState.settledPage) {
+        screens.getOrNull(pagerState.settledPage)?.let { settled ->
+            if (settled != selectedScreen) selectedScreen = settled
         }
     }
 
@@ -639,7 +664,6 @@ fun HavenNavHost(
         bottomBar = {
             if (!desktopFullscreen && !terminalFullscreen && !useSideNavigation) {
                 NavigationBar {
-                    val currentScreen = screens.getOrNull(pagerState.currentPage)
                     navScreens.forEachIndexed { index, screen ->
                         val isDragged = index == navDragIndex
                         NavigationBarItem(
@@ -657,15 +681,13 @@ fun HavenNavHost(
                                     softWrap = false,
                                 )
                             },
-                            selected = screen == currentScreen,
+                            selected = screen == selectedScreen,
                             onClick = {
-                                if (navDragIndex < 0) {
-                                    val pageIndex = screens.indexOf(screen)
-                                    if (pageIndex >= 0) coroutineScope.launch {
-                                        // Use instant scroll to avoid double-jump through
-                                        // intermediate pages during animated scroll
-                                        pagerState.scrollToPage(pageIndex)
-                                    }
+                                // Don't navigate while a drag-reorder is in
+                                // flight. Otherwise just set the selection —
+                                // the render effect scrolls the pager to it.
+                                if (navDragIndex < 0 && screens.contains(screen)) {
+                                    requestScreen(screen)
                                 }
                             },
                             modifier = Modifier
@@ -753,7 +775,6 @@ fun HavenNavHost(
                     NavigationRail(
                         modifier = Modifier.fillMaxHeight(),
                     ) {
-                        val currentScreen = screens.getOrNull(pagerState.currentPage)
                         // Scrollable so the items never clip off the bottom on
                         // short landscape heights — a plain NavigationRail
                         // centres its items and silently cuts off the last ones
@@ -779,12 +800,8 @@ fun HavenNavHost(
                                         )
                                     },
                                     alwaysShowLabel = false,
-                                    selected = screen == currentScreen,
-                                    onClick = {
-                                        coroutineScope.launch {
-                                            pagerState.scrollToPage(pageIndex)
-                                        }
-                                    },
+                                    selected = screen == selectedScreen,
+                                    onClick = { requestScreen(screen) },
                                 )
                             }
                         }
