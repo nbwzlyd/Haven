@@ -126,6 +126,11 @@ class UserPreferencesRepository @Inject constructor(
     // Off by default — a LAN-reachable listener is a wider surface than
     // loopback, though still gated by client pairing. See McpServer.
     private val mcpLanBindEnabledKey = booleanPreferencesKey("mcp_lan_bind_enabled")
+    // Auto-trust MCP clients arriving on the loopback binder (127.0.0.1):
+    // skip pairing + per-action consent for local agents (adb forward /
+    // on-device). On by default — loopback is already the trusted boundary
+    // in the v1 threat model. LAN / WireGuard clients always keep the gate.
+    private val trustLoopbackMcpClientsKey = booleanPreferencesKey("trust_loopback_mcp_clients")
     // Tunnel config id of the WireGuard tunnel to keep up as the MCP
     // carrier. When set (and mcp_wireguard_enabled), the MCP server
     // actively (re)connects this tunnel rather than passively attaching to
@@ -573,6 +578,22 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setMcpLanBindEnabled(enabled: Boolean) {
         dataStore.edit { prefs ->
             prefs[mcpLanBindEnabledKey] = enabled
+        }
+    }
+
+    /**
+     * Whether loopback (127.0.0.1) MCP clients auto-trust: skip both the
+     * pairing prompt and per-action consent. On by default — a local
+     * client is already as trusted as the device. LAN / WireGuard clients
+     * are unaffected and always run the full gate. (#214)
+     */
+    val trustLoopbackMcpClients: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[trustLoopbackMcpClientsKey] ?: true
+    }
+
+    suspend fun setTrustLoopbackMcpClients(enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[trustLoopbackMcpClientsKey] = enabled
         }
     }
 

@@ -191,6 +191,22 @@ class McpServer @Inject constructor(
     @Volatile
     private var allowedClients: Set<String> = emptySet()
 
+    /**
+     * When true (the default), MCP clients arriving on the **loopback**
+     * binder (peer address is a loopback address — `adb forward`, an
+     * on-device agent) skip both the pairing prompt and per-action
+     * consent. This matches the v1 threat model: anyone who can open a
+     * socket to 127.0.0.1 is already as trusted as the device itself
+     * (see the class kdoc), so prompting there is friction with no
+     * security benefit. The LAN and WireGuard binders are the genuinely
+     * remote paths and ALWAYS keep the full pairing + consent gate
+     * regardless of this flag. Mirrors [UserPreferencesRepository
+     * .trustLoopbackMcpClients]; seeded in [start] and updated at
+     * runtime via [setTrustLoopbackEnabled]. (#214)
+     */
+    @Volatile
+    private var trustLoopbackEnabled: Boolean = true
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
@@ -334,7 +350,8 @@ class McpServer @Inject constructor(
         // Seed the in-memory allowlist mirror from DataStore. Subsequent
         // pairing approvals append to this on the dispatch thread.
         allowedClients = runBlocking { preferencesRepository.mcpAllowedClients.first() }
-        Log.i(TAG, "MCP server listening on ${_endpointUrl.value} (paired clients: ${allowedClients.size})")
+        trustLoopbackEnabled = runBlocking { preferencesRepository.trustLoopbackMcpClients.first() }
+        Log.i(TAG, "MCP server listening on ${_endpointUrl.value} (paired clients: ${allowedClients.size}, trustLoopback=$trustLoopbackEnabled)")
 
         serverThread = thread(name = "mcp-http", isDaemon = true) {
             while (isRunning && !ss.isClosed) {
@@ -382,6 +399,16 @@ class McpServer @Inject constructor(
     fun setLanBindEnabled(enabled: Boolean) = synchronized(lifecycleLock) {
         if (!isRunning) return@synchronized
         if (enabled) startLanBinderLocked() else stopLanBinderLocked()
+    }
+
+    /**
+     * Toggle loopback auto-trust at runtime (driven by the
+     * `trustLoopbackMcpClients` preference). No lock needed — it's a
+     * single volatile flag read on the dispatch path. (#214)
+     */
+    fun setTrustLoopbackEnabled(enabled: Boolean) {
+        trustLoopbackEnabled = enabled
+        Log.i(TAG, "MCP loopback auto-trust ${if (enabled) "enabled" else "disabled"}")
     }
 
     /** Must hold [lifecycleLock]. Idempotent. */
@@ -495,7 +522,9 @@ class McpServer @Inject constructor(
                         val conn = ln.accept()
                         scope.launch {
                             try {
-                                handleConnection(conn.inputStream, conn.outputStream)
+                                // WireGuard peers are always remote (a WG
+                                // tunnel IP) — never loopback-trusted. (#214)
+                                handleConnection(conn.inputStream, conn.outputStream, isLoopback = false)
                             } catch (e: Throwable) {
                                 Log.w(TAG, "WG worker crashed: ${e.message}")
                             } finally {
@@ -640,7 +669,13 @@ class McpServer @Inject constructor(
             // Read timeout. Must exceed CONSENT_WAIT_MS so a request blocked on
             // an interactive consent prompt isn't dropped mid-wait.
             socket.soTimeout = 70_000
-            socket.use { s -> handleConnection(s.getInputStream(), s.getOutputStream()) }
+            // Loopback peers (the dedicated 127.0.0.1 binder; also covers ::1
+            // and 127.0.0.0/8) are local clients. The LAN binder also routes
+            // here, but its accepted sockets carry the remote client's LAN
+            // address as peer — so same-device-to-LAN-IP still reads as
+            // non-loopback and keeps the full gate. (#214)
+            val isLoopback = socket.inetAddress?.isLoopbackAddress == true
+            socket.use { s -> handleConnection(s.getInputStream(), s.getOutputStream(), isLoopback) }
         } catch (e: Exception) {
             Log.w(TAG, "client handler error: ${e.message}")
         }
@@ -652,7 +687,7 @@ class McpServer @Inject constructor(
      * netstack accept loop ([wireguardAcceptLoop]) so both transports run
      * identical request handling + pairing checks (#176).
      */
-    private fun handleConnection(input: InputStream, output: OutputStream) {
+    private fun handleConnection(input: InputStream, output: OutputStream, isLoopback: Boolean) {
         val reader = BufferedReader(InputStreamReader(input, Charsets.UTF_8))
         val requestLine = reader.readLine() ?: return
         val parts = requestLine.split(" ")
@@ -692,7 +727,7 @@ class McpServer @Inject constructor(
                     }
                     String(buf, 0, read)
                 } else ""
-                val outcome = handleJsonRpc(body, mcpSessionIdHeader)
+                val outcome = handleJsonRpc(body, mcpSessionIdHeader, isLoopback)
                 if (outcome.httpStatus == 404) {
                     // Streamable-HTTP signal: presented session id is
                     // unknown. Empty body — the client treats this as
@@ -759,7 +794,11 @@ class McpServer @Inject constructor(
      * [requestSessionId] is the value of the inbound `Mcp-Session-Id`
      * header, or null when the client doesn't send one (legacy path).
      */
-    internal fun handleJsonRpc(body: String, requestSessionId: String?): JsonRpcOutcome {
+    internal fun handleJsonRpc(
+        body: String,
+        requestSessionId: String?,
+        isLoopback: Boolean = false,
+    ): JsonRpcOutcome {
         if (body.isBlank()) {
             return JsonRpcOutcome(200, jsonRpcError(null, -32700, "Parse error: empty body"), null)
         }
@@ -795,7 +834,7 @@ class McpServer @Inject constructor(
         var resultJson: JSONObject? = null
         var newSessionId: String? = null
         val response = try {
-            val result = dispatch(method, params, requestSessionId)
+            val result = dispatch(method, params, requestSessionId, isLoopback)
             if (result is JSONObject) resultJson = result
             // A successful `initialize` mints a new session id we'll
             // hand back to the client in the response header. The
@@ -893,7 +932,11 @@ class McpServer @Inject constructor(
      * present but unrecognised we throw [SessionExpiredError] so the
      * HTTP layer returns 404 and the client per spec re-initialises.
      */
-    private fun dispatch(method: String, params: JSONObject, requestSessionId: String?): Any? {
+    private fun dispatch(method: String, params: JSONObject, requestSessionId: String?, isLoopback: Boolean): Any? {
+        // Loopback auto-trust: a client on the loopback binder is treated
+        // as already-paired and consent-bypassed when the pref is on.
+        // LAN / WireGuard (isLoopback=false) always run the full gate. (#214)
+        val trusted = isLoopback && trustLoopbackEnabled
         // Pairing gate: every method except the pair-or-fail path itself
         // requires the calling client to be in the allowlist. `ping` is
         // intentionally allowed unauthenticated so a client can probe
@@ -901,7 +944,7 @@ class McpServer @Inject constructor(
         // itself. `notifications/initialized` is a spec-required ack
         // sent right after `initialize` and is exempt so a paired client
         // that just finished its handshake doesn't silently fail it.
-        if (method != "initialize" && method != "ping" && method != "notifications/initialized") {
+        if (!trusted && method != "initialize" && method != "ping" && method != "notifications/initialized") {
             val sessionClient = requestSessionId?.let { sessions[it]?.clientName }
             if (requestSessionId != null && sessionClient == null) {
                 // The client sent a session id we don't recognise.
@@ -921,31 +964,43 @@ class McpServer @Inject constructor(
             }
         }
         return when (method) {
-            "initialize" -> handleInitialize(params)
+            "initialize" -> handleInitialize(params, trusted)
             "notifications/initialized" -> JSONObject() // ack
             "tools/list" -> handleToolsList()
-            "tools/call" -> handleToolsCall(params)
+            "tools/call" -> handleToolsCall(params, trusted)
             "ping" -> JSONObject()
             else -> throw McpError(-32601, "Method not found: $method")
         }
     }
 
-    private fun handleInitialize(params: JSONObject): JSONObject {
+    private fun handleInitialize(params: JSONObject, trusted: Boolean): JSONObject {
         val clientProtoVersion = params.optString("protocolVersion", "2025-06-18")
         val clientInfo = params.optJSONObject("clientInfo")
         val clientName = clientInfo?.optString("name")?.takeIf { it.isNotBlank() }
         val clientVersion = clientInfo?.optString("version")?.takeIf { it.isNotBlank() }
-        Log.i(TAG, "MCP initialize from name=${clientName ?: "<anonymous>"} v=${clientVersion ?: "?"} protocolVersion=$clientProtoVersion")
+        Log.i(TAG, "MCP initialize from name=${clientName ?: "<anonymous>"} v=${clientVersion ?: "?"} protocolVersion=$clientProtoVersion trusted=$trusted")
 
         // Pairing gate. An empty / unknown name has no way to pair (the
         // user would tap Allow on "MCP client '' wants to connect" with
-        // no idea who's behind it), so refuse outright.
+        // no idea who's behind it), so refuse outright. We keep this even
+        // for loopback-trusted clients: a name is cheap to require and
+        // keeps the audit trail meaningful.
         if (clientName.isNullOrBlank()) {
             throw McpError(
                 -32002,
                 "MCP initialize must include clientInfo.name. Anonymous clients " +
                     "cannot be paired and are rejected.",
             )
+        }
+        // Loopback auto-trust: skip the pairing prompt entirely. We do NOT
+        // persist the name to the allowlist — trust here is origin-scoped
+        // (loopback binder), not name-scoped, so it must never leak to a
+        // later LAN/WireGuard connection that happens to use the same
+        // clientInfo.name. The dispatch gate is already skipped for these
+        // requests (see [dispatch]). (#214)
+        if (trusted) {
+            Log.i(TAG, "MCP initialize: '$clientName' on loopback — auto-trusted, no pairing prompt")
+            return initializeResult()
         }
         // Read the authoritative allowlist from DataStore on every
         // initialize — the in-memory `allowedClients` mirror is only
@@ -982,23 +1037,27 @@ class McpServer @Inject constructor(
                 }
             }
         }
-        return JSONObject().apply {
-            put("protocolVersion", "2025-06-18")
-            put("serverInfo", JSONObject().apply {
-                put("name", "haven-agent")
-                put("version", sh.haven.app.BuildConfig.VERSION_NAME)
+        return initializeResult()
+    }
+
+    /** The `initialize` response body, shared by the paired path and the
+     *  loopback auto-trust path. */
+    private fun initializeResult(): JSONObject = JSONObject().apply {
+        put("protocolVersion", "2025-06-18")
+        put("serverInfo", JSONObject().apply {
+            put("name", "haven-agent")
+            put("version", sh.haven.app.BuildConfig.VERSION_NAME)
+        })
+        put("capabilities", JSONObject().apply {
+            // Advertise tools capability only in v1
+            put("tools", JSONObject().apply {
+                put("listChanged", false)
             })
-            put("capabilities", JSONObject().apply {
-                // Advertise tools capability only in v1
-                put("tools", JSONObject().apply {
-                    put("listChanged", false)
-                })
-            })
-            put("instructions",
-                "Haven is a mobile thin-client OS for distributed compute, storage, and presence. " +
-                    "Use these tools to inspect the user's saved connections, active sessions, and " +
-                    "cloud storage without disturbing the UI they're looking at.")
-        }
+        })
+        put("instructions",
+            "Haven is a mobile thin-client OS for distributed compute, storage, and presence. " +
+                "Use these tools to inspect the user's saved connections, active sessions, and " +
+                "cloud storage without disturbing the UI they're looking at.")
     }
 
     private fun handleToolsList(): JSONObject {
@@ -1009,7 +1068,7 @@ class McpServer @Inject constructor(
         }
     }
 
-    private fun handleToolsCall(params: JSONObject): JSONObject {
+    private fun handleToolsCall(params: JSONObject, trusted: Boolean): JSONObject {
         val name = params.optString("name", "")
             .ifEmpty { throw McpError(-32602, "Missing tool name") }
         val arguments = params.optJSONObject("arguments") ?: JSONObject()
@@ -1052,8 +1111,13 @@ class McpServer @Inject constructor(
         // Look up consent metadata before invoking the handler. Unknown
         // tools fall through to tools.call() which will throw the right
         // error; treating them as NEVER avoids prompting on a typo.
+        //
+        // Loopback auto-trust (#214) bypasses the per-action consent
+        // prompt — but NOT the capability gates above (serve_file /
+        // queue_terminal_input), which are explicit feature on/off
+        // toggles, not consent, and stay regardless of origin.
         val consent = tools.consentFor(name)
-        if (consent != null && consent.level != ConsentLevel.NEVER) {
+        if (!trusted && consent != null && consent.level != ConsentLevel.NEVER) {
             val summary = try {
                 consent.summary(arguments)
             } catch (e: Exception) {

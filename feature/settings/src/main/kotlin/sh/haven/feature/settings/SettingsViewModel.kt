@@ -253,6 +253,16 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Whether loopback (local) MCP clients skip pairing + consent prompts. */
+    val trustLoopbackMcpClients: StateFlow<Boolean> = preferencesRepository.trustLoopbackMcpClients
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    fun setTrustLoopbackMcpClients(enabled: Boolean) {
+        viewModelScope.launch {
+            preferencesRepository.setTrustLoopbackMcpClients(enabled)
+        }
+    }
+
     val agentAllowFileRead: StateFlow<Boolean> = preferencesRepository.agentAllowFileRead
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 

@@ -161,6 +161,14 @@ class HavenApp : Application(), Configuration.Provider {
             .onEach { mcpServer.setLanBindEnabled(it) }
             .launchIn(appScope)
 
+        // Toggle loopback auto-trust live. drop(1): start() reads the
+        // initial value itself, so this only reacts to later changes. (#214)
+        preferencesRepository.trustLoopbackMcpClients
+            .drop(1)
+            .distinctUntilChanged()
+            .onEach { mcpServer.setTrustLoopbackEnabled(it) }
+            .launchIn(appScope)
+
         // Re-home the MCP reverse tunnel when the set of RUNNING guest services
         // changes (e.g. one started/stopped via the MCP tools after the tunnel
         // was already up), so its loopback port is multiplexed onto -R. drop(1)

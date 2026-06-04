@@ -320,6 +320,9 @@
     <string name="settings_mcp_lan_title">Expose on Wi-Fi/LAN</string>
     <string name="settings_mcp_lan_subtitle_on">Enabled — also reachable at &lt;device-lan-ip&gt;:8730 on the local network</string>
     <string name="settings_mcp_lan_subtitle_off">Disabled — turn on for direct reach from a device on the same Wi-Fi/LAN</string>
+    <string name="settings_mcp_trust_loopback_title">Trust local clients</string>
+    <string name="settings_mcp_trust_loopback_subtitle_on">Enabled — local clients (127.0.0.1) connect without pairing or approval prompts. Wi-Fi/LAN and WireGuard clients still prompt.</string>
+    <string name="settings_mcp_trust_loopback_subtitle_off">Disabled — even local clients must be paired and approve each request</string>
     <string name="settings_mcp_copy_url_title">Copy agent endpoint URL</string>
     <string name="settings_mcp_url_copied_toast">Endpoint copied</string>
     <string name="settings_mcp_copy_config_title">Copy MCP client config</string>

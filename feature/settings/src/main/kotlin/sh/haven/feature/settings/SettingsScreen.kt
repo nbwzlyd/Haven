@@ -938,6 +938,23 @@ fun SettingsScreen(
                 onCheckedChange = viewModel::setMcpLanBindEnabled,
             )
 
+            // Loopback auto-trust: local clients (127.0.0.1 via adb forward
+            // or on-device) skip pairing + per-call consent prompts. On by
+            // default — a local client is already as trusted as the device.
+            // LAN / WireGuard clients always keep the full gate. (#214)
+            val trustLoopbackMcpClients by viewModel.trustLoopbackMcpClients.collectAsState()
+            SettingsToggleItem(
+                icon = Icons.Filled.Devices,
+                title = stringResource(R.string.settings_mcp_trust_loopback_title),
+                subtitle = if (trustLoopbackMcpClients) {
+                    stringResource(R.string.settings_mcp_trust_loopback_subtitle_on)
+                } else {
+                    stringResource(R.string.settings_mcp_trust_loopback_subtitle_off)
+                },
+                checked = trustLoopbackMcpClients,
+                onCheckedChange = viewModel::setTrustLoopbackMcpClients,
+            )
+
             // Endpoint URL is always the canonical port range start —
             // the server binds to the first free port in 8730..8739
             val endpointUrl = "http://127.0.0.1:8730/mcp"

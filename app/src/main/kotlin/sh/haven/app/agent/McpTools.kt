@@ -1628,7 +1628,7 @@ internal class McpTools(
         ) { args -> readGuestFile(args) },
 
         "write_guest_file" to ToolHandler(
-            description = "Write a file into the ACTIVE proot guest. Supply either `content` (UTF-8 text) or `contentBase64` (binary). Parent directories are created by default. The reliable way to push agent-authored files (scripts, generators, configs) into the guest without a terminal heredoc.",
+            description = "Write a file into the ACTIVE proot guest. Supply either `content` (UTF-8 text) or `contentBase64` (binary). Parent directories are created by default. The reliable way to push agent-authored files (scripts, generators, configs) into the guest without a terminal heredoc. For large files, send in ordered chunks: first chunk {append:false, final:false}, middle chunks {append:true, final:false}, last chunk {append:true, final:true} — the file lands in the guest only on the final chunk.",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -1647,6 +1647,14 @@ internal class McpTools(
                     put("mkdirs", JSONObject().apply {
                         put("type", "boolean")
                         put("description", "Create parent directories if missing. Default true.")
+                    })
+                    put("append", JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Append this chunk to the buffered bytes for this path instead of starting fresh. Default false (truncate). Use true for chunks after the first when sending a large file in pieces.")
+                    })
+                    put("final", JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Copy the buffered bytes into the guest now. Default true (single-call write). Set false on every chunk except the last; the file isn't written into the guest until final=true.")
                     })
                 })
                 put("required", JSONArray().put("path"))
@@ -7102,6 +7110,16 @@ internal class McpTools(
      * `/tmp` (== app cacheDir) then `cp`s them to [path] inside the proot,
      * creating parent dirs by default. Accepts UTF-8 `content` or binary
      * `contentBase64` (exactly one).
+     *
+     * Supports chunked transfer for large files so a single huge base64
+     * payload doesn't have to fit one JSON-RPC request (#214):
+     * - `append` (default false): false truncates/creates the per-path
+     *   staging buffer; true appends this chunk to it.
+     * - `final` (default true): true copies the buffer into the guest and
+     *   reports `bytesWritten`; false only buffers and reports
+     *   `bufferedBytes` without touching the guest yet.
+     * Single-call usage (no `append`/`final`) is identical to before.
+     * Chunks are assumed delivered in order over sequential calls.
      */
     private suspend fun writeGuestFile(args: JSONObject): JSONObject {
         val path = args.optString("path").takeIf { it.isNotBlank() }
@@ -7111,6 +7129,8 @@ internal class McpTools(
         val hasB64 = args.has("contentBase64")
         if (hasText == hasB64) throw McpError(-32602, "provide exactly one of content or contentBase64")
         val mkdirs = args.optBoolean("mkdirs", true)
+        val append = args.optBoolean("append", false)
+        val final = args.optBoolean("final", true)
         if (!prootManager.isRootfsInstalled) {
             throw McpError(-32603, "Active distro '${prootManager.activeDistroId}' has no installed rootfs")
         }
@@ -7123,11 +7143,26 @@ internal class McpTools(
         } else {
             args.getString("content").toByteArray(Charsets.UTF_8)
         }
-        val q = "'" + path.replace("'", "'\\''") + "'"
-        val staged = "haven-write-${System.currentTimeMillis()}"
+        // Staging buffer keyed deterministically by the target path so a
+        // sequence of chunk calls reuses the same file. append=false
+        // truncates (a fresh transfer self-heals over any abandoned
+        // buffer); append=true accumulates.
+        val staged = "haven-write-" + Integer.toHexString(path.hashCode())
         val staging = File(context.cacheDir, staged)
         val logFile = File(context.cacheDir, "$staged.log")
-        staging.writeBytes(bytes)
+        if (append) staging.appendBytes(bytes) else staging.writeBytes(bytes)
+
+        // Non-final chunk: buffered only, guest untouched.
+        if (!final) {
+            return JSONObject().apply {
+                put("path", path)
+                put("bufferedBytes", staging.length())
+                put("status", "buffered")
+            }
+        }
+
+        // Final (or single-call): copy the accumulated buffer into the guest.
+        val q = "'" + path.replace("'", "'\\''") + "'"
         try {
             val mk = if (mkdirs) "mkdir -p -- \"\$(dirname -- $q)\" && " else ""
             val script = "{ $mk cp -- /tmp/$staged $q ; } > /tmp/$staged.log 2>&1; echo EXIT:\$?"
@@ -7138,7 +7173,7 @@ internal class McpTools(
             }
             return JSONObject().apply {
                 put("path", path)
-                put("bytesWritten", bytes.size)
+                put("bytesWritten", staging.length())
                 put("status", "written")
             }
         } finally {
