@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">Панель клавиатуры</string>
     <string name="settings_toolbar_assign_hint">Назначьте каждую клавишу: Ряд 1, Ряд 2 или Выкл</string>
     <string name="settings_toolbar_arrow_keys">Расположение стрелок</string>
+    <string name="settings_toolbar_edit_controls">Элементы режима редактирования</string>
+    <string name="settings_edit_controls_split">Раздельно</string>
+    <string name="settings_edit_controls_left">Слева</string>
+    <string name="settings_edit_controls_right">Справа</string>
     <string name="settings_toolbar_function_keys">Функциональные клавиши</string>
     <string name="settings_toolbar_symbols">Символы</string>
     <string name="settings_toolbar_custom_keys">Пользовательские клавиши</string>

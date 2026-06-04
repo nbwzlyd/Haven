@@ -49,6 +49,25 @@ enum class NavBlockMode(val id: String, val label: String) {
     }
 }
 
+/**
+ * Where the toolbar's fixed (non-draggable) controls sit in edit/reorder mode —
+ * the done-✓, the desktop icon, add-key and settings. The draggable keys always
+ * stay in the middle; this only decides which side(s) the fixed cluster occupies.
+ * See `ReorderToolbarContent` in `core:toolbar`. (#224)
+ */
+enum class EditModeControlsPlacement(val id: String) {
+    /** ✓/desktop on the left, add/settings on the right (default). */
+    SPLIT("split"),
+    /** All fixed controls grouped on the left. */
+    LEFT("left"),
+    /** All fixed controls grouped on the right. */
+    RIGHT("right");
+
+    companion object {
+        fun fromId(id: String): EditModeControlsPlacement? = entries.find { it.id == id }
+    }
+}
+
 data class MacroPreset(val label: String, val send: String, val description: String)
 
 val MACRO_PRESETS = listOf(

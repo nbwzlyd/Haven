@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">Barra de herramientas</string>
     <string name="settings_toolbar_assign_hint">Asigna cada tecla a Fila 1, Fila 2 o Desactivado</string>
     <string name="settings_toolbar_arrow_keys">Disposición de flechas</string>
+    <string name="settings_toolbar_edit_controls">Controles del modo de edición</string>
+    <string name="settings_edit_controls_split">Dividir</string>
+    <string name="settings_edit_controls_left">Izquierda</string>
+    <string name="settings_edit_controls_right">Derecha</string>
     <string name="settings_toolbar_function_keys">Teclas de función</string>
     <string name="settings_toolbar_symbols">Símbolos</string>
     <string name="settings_toolbar_custom_keys">Teclas personalizadas</string>

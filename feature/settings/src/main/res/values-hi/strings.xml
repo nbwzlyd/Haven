@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">कीबोर्ड टूलबार</string>
     <string name="settings_toolbar_assign_hint">प्रत्येक कुंजी को पंक्ति 1, पंक्ति 2 या बंद में असाइन करें</string>
     <string name="settings_toolbar_arrow_keys">एरो कुंजी लेआउट</string>
+    <string name="settings_toolbar_edit_controls">संपादन-मोड नियंत्रण</string>
+    <string name="settings_edit_controls_split">विभाजित</string>
+    <string name="settings_edit_controls_left">बायाँ</string>
+    <string name="settings_edit_controls_right">दायाँ</string>
     <string name="settings_toolbar_function_keys">फ़ंक्शन कुंजियाँ</string>
     <string name="settings_toolbar_symbols">प्रतीक</string>
     <string name="settings_toolbar_custom_keys">कस्टम कुंजियाँ</string>

@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">キーボードツールバー</string>
     <string name="settings_toolbar_assign_hint">各キーを行1、行2、またはオフに割り当て</string>
     <string name="settings_toolbar_arrow_keys">矢印キーレイアウト</string>
+    <string name="settings_toolbar_edit_controls">編集モードのコントロール</string>
+    <string name="settings_edit_controls_split">分割</string>
+    <string name="settings_edit_controls_left">左</string>
+    <string name="settings_edit_controls_right">右</string>
     <string name="settings_toolbar_function_keys">ファンクションキー</string>
     <string name="settings_toolbar_symbols">記号</string>
     <string name="settings_toolbar_custom_keys">カスタムキー</string>

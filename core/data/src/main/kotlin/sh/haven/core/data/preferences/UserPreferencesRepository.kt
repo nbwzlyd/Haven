@@ -39,6 +39,7 @@ class UserPreferencesRepository @Inject constructor(
     private val toolbarMinButtonWidthKey = intPreferencesKey("toolbar_min_button_width")
     private val appWindowDefsKey = stringPreferencesKey("app_window_defs")
     private val navBlockModeKey = stringPreferencesKey("nav_block_mode")
+    private val editModeControlsPlacementKey = stringPreferencesKey("edit_mode_controls_placement")
     private val sessionCommandOverrideKey = stringPreferencesKey("session_command_override")
     private val sftpSortModeKey = stringPreferencesKey("sftp_sort_mode")
     private val lockTimeoutKey = stringPreferencesKey("lock_timeout")
@@ -1020,6 +1021,18 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun setNavBlockMode(mode: NavBlockMode) {
         dataStore.edit { prefs ->
             prefs[navBlockModeKey] = mode.id
+        }
+    }
+
+    /** Where the fixed (non-draggable) controls sit in toolbar edit mode. (#224) */
+    val editModeControlsPlacement: Flow<EditModeControlsPlacement> = dataStore.data.map { prefs ->
+        prefs[editModeControlsPlacementKey]?.let { EditModeControlsPlacement.fromId(it) }
+            ?: EditModeControlsPlacement.SPLIT
+    }
+
+    suspend fun setEditModeControlsPlacement(placement: EditModeControlsPlacement) {
+        dataStore.edit { prefs ->
+            prefs[editModeControlsPlacementKey] = placement.id
         }
     }
 

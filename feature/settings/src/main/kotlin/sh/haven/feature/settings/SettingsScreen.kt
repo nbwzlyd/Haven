@@ -134,6 +134,7 @@ import androidx.compose.ui.zIndex
 import kotlin.math.roundToInt
 import androidx.hilt.navigation.compose.hiltViewModel
 import sh.haven.core.ui.navigation.Screen
+import sh.haven.core.data.preferences.EditModeControlsPlacement
 import sh.haven.core.data.preferences.MACRO_PRESETS
 import sh.haven.core.data.preferences.NavBlockMode
 import sh.haven.core.data.preferences.ToolbarItem
@@ -165,6 +166,7 @@ fun SettingsScreen(
     val toolbarLayout by viewModel.toolbarLayout.collectAsState()
     val toolbarLayoutJson by viewModel.toolbarLayoutJson.collectAsState()
     val navBlockMode by viewModel.navBlockMode.collectAsState()
+    val editModeControlsPlacement by viewModel.editModeControlsPlacement.collectAsState()
     val toolbarMinButtonWidth by viewModel.toolbarMinButtonWidth.collectAsState()
     val showSearchButton by viewModel.showSearchButton.collectAsState()
     val showCopyOutputButton by viewModel.showCopyOutputButton.collectAsState()
@@ -1454,6 +1456,7 @@ fun SettingsScreen(
             layout = toolbarLayout,
             layoutJson = toolbarLayoutJson,
             navBlockMode = navBlockMode,
+            editModeControlsPlacement = editModeControlsPlacement,
             minButtonWidth = toolbarMinButtonWidth,
             onMinButtonWidthChange = { viewModel.setToolbarMinButtonWidth(it) },
             onDismiss = { showToolbarConfigDialog = false },
@@ -1466,6 +1469,7 @@ fun SettingsScreen(
                 showToolbarConfigDialog = false
             },
             onNavBlockModeChange = { viewModel.setNavBlockMode(it) },
+            onEditControlsPlacementChange = { viewModel.setEditModeControlsPlacement(it) },
         )
     }
 
@@ -2216,17 +2220,27 @@ private fun SettingsItem(
 /** Assignment for a key in the toolbar config dialog. */
 private enum class KeyAssignment { ROW1, ROW2, OFF }
 
+/** String resource for an [EditModeControlsPlacement] chip label. */
+@androidx.annotation.StringRes
+private fun editControlsPlacementLabel(placement: EditModeControlsPlacement): Int = when (placement) {
+    EditModeControlsPlacement.SPLIT -> R.string.settings_edit_controls_split
+    EditModeControlsPlacement.LEFT -> R.string.settings_edit_controls_left
+    EditModeControlsPlacement.RIGHT -> R.string.settings_edit_controls_right
+}
+
 @Composable
 private fun ToolbarConfigDialog(
     layout: ToolbarLayout,
     layoutJson: String,
     navBlockMode: NavBlockMode,
+    editModeControlsPlacement: EditModeControlsPlacement,
     minButtonWidth: Int,
     onMinButtonWidthChange: (Int) -> Unit,
     onDismiss: () -> Unit,
     onSaveLayout: (ToolbarLayout) -> Unit,
     onSaveJson: (String) -> Unit,
     onNavBlockModeChange: (NavBlockMode) -> Unit,
+    onEditControlsPlacementChange: (EditModeControlsPlacement) -> Unit,
 ) {
     var advancedMode by remember { mutableStateOf(false) }
 
@@ -2241,12 +2255,14 @@ private fun ToolbarConfigDialog(
         ToolbarSimpleEditor(
             layout = layout,
             navBlockMode = navBlockMode,
+            editModeControlsPlacement = editModeControlsPlacement,
             minButtonWidth = minButtonWidth,
             onMinButtonWidthChange = onMinButtonWidthChange,
             onDismiss = onDismiss,
             onSave = onSaveLayout,
             onAdvancedMode = { advancedMode = true },
             onNavBlockModeChange = onNavBlockModeChange,
+            onEditControlsPlacementChange = onEditControlsPlacementChange,
         )
     }
 }
@@ -2260,12 +2276,14 @@ private data class CustomKeyState(
 private fun ToolbarSimpleEditor(
     layout: ToolbarLayout,
     navBlockMode: NavBlockMode,
+    editModeControlsPlacement: EditModeControlsPlacement,
     minButtonWidth: Int,
     onMinButtonWidthChange: (Int) -> Unit,
     onDismiss: () -> Unit,
     onSave: (ToolbarLayout) -> Unit,
     onAdvancedMode: () -> Unit,
     onNavBlockModeChange: (NavBlockMode) -> Unit,
+    onEditControlsPlacementChange: (EditModeControlsPlacement) -> Unit,
 ) {
     // Build assignment map from current layout (built-in keys only)
     val row1BuiltIns = remember(layout) {
@@ -2346,6 +2364,25 @@ private fun ToolbarSimpleEditor(
                             selected = navBlockMode == mode,
                             onClick = { onNavBlockModeChange(mode) },
                             label = { Text(mode.label, fontSize = 11.sp) },
+                            modifier = Modifier.padding(horizontal = 2.dp),
+                        )
+                    }
+                }
+
+                Text(
+                    stringResource(R.string.settings_toolbar_edit_controls),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                )
+                Row(modifier = Modifier.padding(bottom = 4.dp)) {
+                    EditModeControlsPlacement.entries.forEach { placement ->
+                        FilterChip(
+                            selected = editModeControlsPlacement == placement,
+                            onClick = { onEditControlsPlacementChange(placement) },
+                            label = {
+                                Text(stringResource(editControlsPlacementLabel(placement)), fontSize = 11.sp)
+                            },
                             modifier = Modifier.padding(horizontal = 2.dp),
                         )
                     }

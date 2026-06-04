@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import org.connectbot.terminal.SelectionController
+import sh.haven.core.data.preferences.EditModeControlsPlacement
 import sh.haven.core.data.preferences.ToolbarItem
 import sh.haven.core.data.preferences.ToolbarKey
 import kotlinx.coroutines.delay
@@ -211,6 +212,7 @@ fun KeyboardToolbar(
     bracketPasteMode: Boolean = false,
     layout: ToolbarLayout = ToolbarLayout.DEFAULT,
     navBlockMode: sh.haven.core.data.preferences.NavBlockMode = sh.haven.core.data.preferences.NavBlockMode.ALIGNED,
+    editModeControlsPlacement: sh.haven.core.data.preferences.EditModeControlsPlacement = sh.haven.core.data.preferences.EditModeControlsPlacement.SPLIT,
     minKeyWidth: Dp = DEFAULT_MIN_KEY_WIDTH,
     onToggleCtrl: () -> Unit = {},
     onToggleAlt: () -> Unit = {},
@@ -328,6 +330,7 @@ fun KeyboardToolbar(
                     onDone = { onReorderModeChanged(false) },
                     onOpenSettings = onOpenSettings,
                     showVncIcon = onVncTap != null,
+                    placement = editModeControlsPlacement,
                 )
             } else if (selectionActive && selectionController != null) {
                 Column {
@@ -1198,6 +1201,93 @@ private fun navBounds(row: List<ToolbarItem>): IntRange? {
     return first..last
 }
 
+/**
+ * The fixed (non-draggable) done-✓ over the desktop icon — mirrors live col 0.
+ * Tapping ✓ exits reorder mode; the desktop glyph is just a position marker.
+ */
+@Composable
+private fun FixedDoneDesktopColumn(showVncIcon: Boolean, onDone: () -> Unit) {
+    KeyColumn(
+        top = {
+            IconButton(onClick = onDone, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = stringResource(R.string.toolbar_done_reordering),
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        },
+        bottom = if (showVncIcon) {
+            {
+                Icon(
+                    Icons.Filled.DesktopWindows,
+                    contentDescription = stringResource(R.string.toolbar_vnc_desktop),
+                    modifier = Modifier.size(32.dp).padding(7.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            null
+        },
+    )
+}
+
+/** The fixed add-custom-key over open-settings buttons. */
+@Composable
+private fun FixedAddSettingsColumn(
+    onAddKey: () -> Unit,
+    onSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp),
+    ) {
+        FilledTonalButton(
+            onClick = onAddKey,
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ),
+        ) {
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = stringResource(R.string.toolbar_add_custom_key),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        FilledTonalButton(
+            onClick = onSettings,
+            modifier = Modifier.height(32.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+            colors = ButtonDefaults.filledTonalButtonColors(
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+            ),
+        ) {
+            Icon(
+                Icons.Filled.Settings,
+                contentDescription = stringResource(R.string.toolbar_settings),
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+/** Vertical separator between the fixed controls and the draggable keys (#224). */
+@Composable
+private fun EditModeDivider(modifier: Modifier = Modifier) {
+    VerticalDivider(
+        modifier = modifier
+            .padding(horizontal = 3.dp)
+            .height(60.dp),
+        color = MaterialTheme.colorScheme.outlineVariant,
+    )
+}
+
 @Composable
 private fun ReorderToolbarContent(
     layout: ToolbarLayout,
@@ -1205,6 +1295,7 @@ private fun ReorderToolbarContent(
     onDone: () -> Unit,
     onOpenSettings: () -> Unit = {},
     showVncIcon: Boolean = false,
+    placement: EditModeControlsPlacement = EditModeControlsPlacement.SPLIT,
 ) {
     val rows = remember(layout) {
         // Pin the leading icon keys to match the live render's fixed 2-column
@@ -1316,44 +1407,27 @@ private fun ReorderToolbarContent(
             targetRow.add(insertAt, item)
         }
 
-        // Left block: a fixed leading column (done-✓ over the VNC icon, mirroring
-        // live col 0) so the two draggable segments below pair index-for-index and
-        // their columns line up — instead of the old VNC-prepend that shifted row 2.
+        // Left block. The fixed controls lead here for SPLIT (done-✓/desktop) and
+        // LEFT (the whole cluster); for RIGHT nothing leads and the draggable keys
+        // start at the edge. The draggable segments pair index-for-index in a Column
+        // sized to the wider of the two, mirroring live col 0. (#224)
         Row(verticalAlignment = Alignment.Top) {
-            KeyColumn(
-                top = {
-                    IconButton(
-                        onClick = ::saveAndExit,
-                        modifier = Modifier.size(32.dp),
-                    ) {
-                        Icon(
-                            Icons.Filled.Check,
-                            contentDescription = stringResource(R.string.toolbar_done_reordering),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                },
-                bottom = if (showVncIcon) {
-                    {
-                        Icon(
-                            Icons.Filled.DesktopWindows,
-                            contentDescription = stringResource(R.string.toolbar_vnc_desktop),
-                            modifier = Modifier.size(32.dp).padding(7.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                } else {
-                    null
-                },
-            )
-            // Divider: fixed app controls (✓ / desktop) | draggable keys (#224)
-            VerticalDivider(
-                modifier = Modifier
-                    .padding(horizontal = 3.dp)
-                    .height(60.dp),
-                color = MaterialTheme.colorScheme.outlineVariant,
-            )
+            when (placement) {
+                EditModeControlsPlacement.SPLIT -> {
+                    FixedDoneDesktopColumn(showVncIcon, ::saveAndExit)
+                    EditModeDivider()
+                }
+                EditModeControlsPlacement.LEFT -> {
+                    FixedDoneDesktopColumn(showVncIcon, ::saveAndExit)
+                    FixedAddSettingsColumn(
+                        onAddKey = { showAddKeyDialog = true },
+                        onSettings = { saveAndExit(); onOpenSettings() },
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
+                    EditModeDivider()
+                }
+                EditModeControlsPlacement.RIGHT -> {}
+            }
             Column(modifier = Modifier.width(IntrinsicSize.Max)) {
                 DraggableSegment(
                     items = row1,
@@ -1435,51 +1509,35 @@ private fun ReorderToolbarContent(
             }
         }
 
-        // Divider: draggable keys | fixed app controls (add-key / settings) (#224)
-        VerticalDivider(
-            modifier = Modifier
-                .align(Alignment.CenterVertically)
-                .padding(horizontal = 3.dp)
-                .height(60.dp),
-            color = MaterialTheme.colorScheme.outlineVariant,
-        )
-        // Action buttons: add custom key + open full settings
-        Column(
-            modifier = Modifier
-                .align(Alignment.CenterVertically)
-                .padding(start = 4.dp),
-            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp),
-        ) {
-            FilledTonalButton(
-                onClick = { showAddKeyDialog = true },
-                modifier = Modifier.height(32.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                ),
-            ) {
-                Icon(
-                    Icons.Filled.Add,
-                    contentDescription = stringResource(R.string.toolbar_add_custom_key),
-                    modifier = Modifier.size(18.dp),
+        // Trailing fixed controls: add/settings for SPLIT, the whole cluster for
+        // RIGHT, nothing for LEFT (everything leads there). (#224)
+        when (placement) {
+            EditModeControlsPlacement.SPLIT -> {
+                EditModeDivider(Modifier.align(Alignment.CenterVertically))
+                FixedAddSettingsColumn(
+                    onAddKey = { showAddKeyDialog = true },
+                    onSettings = { saveAndExit(); onOpenSettings() },
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
+                        .padding(start = 4.dp),
                 )
             }
-            FilledTonalButton(
-                onClick = { saveAndExit(); onOpenSettings() },
-                modifier = Modifier.height(32.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                ),
-            ) {
-                Icon(
-                    Icons.Filled.Settings,
-                    contentDescription = stringResource(R.string.toolbar_settings),
-                    modifier = Modifier.size(18.dp),
-                )
+            EditModeControlsPlacement.RIGHT -> {
+                EditModeDivider(Modifier.align(Alignment.CenterVertically))
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
+                        .padding(start = 4.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    FixedDoneDesktopColumn(showVncIcon, ::saveAndExit)
+                    FixedAddSettingsColumn(
+                        onAddKey = { showAddKeyDialog = true },
+                        onSettings = { saveAndExit(); onOpenSettings() },
+                    )
+                }
             }
+            EditModeControlsPlacement.LEFT -> {}
         }
     }
 }
@@ -1668,257 +1726,6 @@ private fun DraggableSegment(
 }
 
 @Composable
-private fun ReorderableToolbarRow(
-    items: MutableList<ToolbarItem>,
-    showDoneButton: Boolean = false,
-    onDone: () -> Unit = {},
-    navGroupShape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
-) {
-    var dragGroupStart by remember { mutableIntStateOf(-1) }
-    var dragGroupEnd by remember { mutableIntStateOf(-1) }
-    var dragOffset by remember { mutableFloatStateOf(0f) }
-    val itemWidths = remember { mutableStateMapOf<Int, Float>() }
-    val itemLeftEdges = remember { mutableStateMapOf<Int, Float>() }
-    val view = LocalView.current
-    val scrollState = rememberScrollState()
-    var autoScrollSpeed by remember { mutableFloatStateOf(0f) }
-    var viewportWidth by remember { mutableIntStateOf(0) }
-
-    /** Find the contiguous run of nav keys containing [index], or index..index for non-nav. */
-    fun navGroupAt(index: Int): IntRange {
-        val item = items[index]
-        if (item !is ToolbarItem.BuiltIn || item.key !in NAV_KEYS) return index..index
-        var start = index
-        while (start > 0) {
-            val prev = items[start - 1]
-            if (prev is ToolbarItem.BuiltIn && prev.key in NAV_KEYS) start-- else break
-        }
-        var end = index
-        while (end < items.lastIndex) {
-            val next = items[end + 1]
-            if (next is ToolbarItem.BuiltIn && next.key in NAV_KEYS) end++ else break
-        }
-        return start..end
-    }
-
-    fun checkSwaps() {
-        if (dragGroupStart < 0) return
-        val groupLeft = itemLeftEdges[dragGroupStart] ?: return
-        val groupWidth = itemWidths[dragGroupStart] ?: return
-        val groupCenter = groupLeft + groupWidth / 2 + dragOffset
-        // Swap with right neighbor (move it before the group)
-        val rightIdx = dragGroupEnd + 1
-        if (rightIdx <= items.lastIndex) {
-            val nextLeft = itemLeftEdges[rightIdx]
-            val nextWidth = itemWidths[rightIdx]
-            if (nextLeft != null && nextWidth != null &&
-                groupCenter > nextLeft + nextWidth / 2
-            ) {
-                val removed = items.removeAt(rightIdx)
-                items.add(dragGroupStart, removed)
-                dragGroupStart++
-                dragGroupEnd++
-                dragOffset = 0f
-                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            }
-        }
-        // Swap with left neighbor (move it after the group)
-        val leftIdx = dragGroupStart - 1
-        if (leftIdx >= 0) {
-            val prevLeft = itemLeftEdges[leftIdx]
-            val prevWidth = itemWidths[leftIdx]
-            if (prevLeft != null && prevWidth != null &&
-                groupCenter < prevLeft + prevWidth / 2
-            ) {
-                val removed = items.removeAt(leftIdx)
-                items.add(dragGroupEnd, removed)
-                dragGroupStart--
-                dragGroupEnd--
-                dragOffset = 0f
-                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            }
-        }
-    }
-
-    // Auto-scroll when dragging near viewport edges
-    LaunchedEffect(autoScrollSpeed) {
-        if (autoScrollSpeed != 0f) {
-            while (true) {
-                val scrolled = scrollState.scrollBy(autoScrollSpeed)
-                dragOffset += scrolled
-                checkSwaps()
-                delay(16)
-            }
-        }
-    }
-
-    Box(
-        modifier = Modifier.onGloballyPositioned { viewportWidth = it.size.width },
-    ) {
-        Row(
-            modifier = Modifier
-                .horizontalScroll(scrollState)
-                .padding(horizontal = 4.dp, vertical = 1.dp)
-                .pointerInput(items.size) {
-                    val edgeThreshold = 40.dp.toPx()
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { offset ->
-                            val hitIndex = (0 until items.size).find { idx ->
-                                val left = itemLeftEdges[idx] ?: return@find false
-                                val width = itemWidths[idx] ?: return@find false
-                                offset.x >= left && offset.x < left + width
-                            } ?: -1
-                            if (hitIndex >= 0) {
-                                val item = items[hitIndex]
-                                val isKeyboard = item is ToolbarItem.BuiltIn &&
-                                    item.key == ToolbarKey.KEYBOARD
-                                if (!isKeyboard) {
-                                    val group = navGroupAt(hitIndex)
-                                    dragGroupStart = group.first
-                                    dragGroupEnd = group.last
-                                    dragOffset = 0f
-                                    view.performHapticFeedback(
-                                        HapticFeedbackConstants.LONG_PRESS,
-                                    )
-                                }
-                            }
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            if (dragGroupStart >= 0) {
-                                dragOffset += dragAmount.x
-                                checkSwaps()
-                                // Auto-scroll near viewport edges
-                                val fingerInViewport =
-                                    change.position.x - scrollState.value
-                                autoScrollSpeed = when {
-                                    fingerInViewport < edgeThreshold &&
-                                        scrollState.value > 0 -> -8f
-                                    viewportWidth > 0 &&
-                                        fingerInViewport > viewportWidth - edgeThreshold &&
-                                        scrollState.value < scrollState.maxValue -> 8f
-                                    else -> 0f
-                                }
-                            }
-                        },
-                        onDragEnd = {
-                            dragGroupStart = -1
-                            dragGroupEnd = -1
-                            dragOffset = 0f
-                            autoScrollSpeed = 0f
-                        },
-                        onDragCancel = {
-                            dragGroupStart = -1
-                            dragGroupEnd = -1
-                            dragOffset = 0f
-                            autoScrollSpeed = 0f
-                        },
-                    )
-                },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            var i = 0
-            while (i < items.size) {
-                val item = items[i]
-                val isDoneButton = showDoneButton &&
-                    item is ToolbarItem.BuiltIn && item.key == ToolbarKey.KEYBOARD
-                val isNav = item is ToolbarItem.BuiltIn && item.key in NAV_KEYS
-
-                if (isDoneButton) {
-                    IconButton(
-                        onClick = onDone,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .onGloballyPositioned { coords ->
-                                itemWidths[i] = coords.size.width.toFloat()
-                                itemLeftEdges[i] = coords.positionInParent().x
-                            },
-                    ) {
-                        Icon(
-                            Icons.Filled.Check,
-                            contentDescription = stringResource(R.string.toolbar_done_reordering),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    i++
-                } else if (isNav) {
-                    // Find contiguous run of nav keys
-                    var end = i
-                    while (end + 1 < items.size) {
-                        val next = items[end + 1]
-                        if (next is ToolbarItem.BuiltIn && next.key in NAV_KEYS) end++
-                        else break
-                    }
-                    val groupStart = i
-                    val isBeingDragged = groupStart in dragGroupStart..dragGroupEnd
-                    // Render nav group as a bordered unit
-                    Row(
-                        modifier = Modifier
-                            .onGloballyPositioned { coords ->
-                                itemWidths[groupStart] = coords.size.width.toFloat()
-                                itemLeftEdges[groupStart] =
-                                    coords.positionInParent().x
-                            }
-                            .then(
-                                if (isBeingDragged) {
-                                    Modifier
-                                        .offset {
-                                            IntOffset(dragOffset.roundToInt(), 0)
-                                        }
-                                        .zIndex(1f)
-                                        .graphicsLayer {
-                                            scaleX = 1.05f
-                                            scaleY = 1.05f
-                                        }
-                                } else Modifier
-                            )
-                            .border(
-                                1.dp,
-                                MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                navGroupShape,
-                            )
-                            .padding(horizontal = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        for (j in groupStart..end) {
-                            ReorderModeNavKey(items[j])
-                        }
-                    }
-                    i = end + 1
-                } else {
-                    // Single non-nav item
-                    val idx = i
-                    Box(
-                        modifier = Modifier
-                            .onGloballyPositioned { coords ->
-                                itemWidths[idx] = coords.size.width.toFloat()
-                                itemLeftEdges[idx] = coords.positionInParent().x
-                            }
-                            .then(
-                                if (idx in dragGroupStart..dragGroupEnd) {
-                                    Modifier
-                                        .offset {
-                                            IntOffset(dragOffset.roundToInt(), 0)
-                                        }
-                                        .zIndex(1f)
-                                        .graphicsLayer {
-                                            scaleX = 1.05f
-                                            scaleY = 1.05f
-                                        }
-                                } else Modifier
-                            ),
-                    ) {
-                        ReorderModeKey(item)
-                    }
-                    i++
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun ReorderModeKey(item: ToolbarItem) {
     // Render through the shared visual so a key looks the same in reorder mode as
     // in live mode — icons stay icons, and Enter/arrows/symbols keep their glyph.
@@ -1976,41 +1783,6 @@ private fun ReorderNavCell(key: ToolbarKey) {
                 )
             }
         }
-    }
-}
-
-/** Display label for nav keys — uses arrow symbols instead of text names. */
-private fun navKeyLabel(item: ToolbarItem): String {
-    if (item !is ToolbarItem.BuiltIn) return item.displayLabel
-    return when (item.key) {
-        ToolbarKey.ARROW_LEFT -> "\u2190"
-        ToolbarKey.ARROW_UP -> "\u2191"
-        ToolbarKey.ARROW_DOWN -> "\u2193"
-        ToolbarKey.ARROW_RIGHT -> "\u2192"
-        else -> item.displayLabel
-    }
-}
-
-@Composable
-private fun ReorderModeNavKey(item: ToolbarItem) {
-    val label = navKeyLabel(item)
-    val isArrow = item is ToolbarItem.BuiltIn && item.key in setOf(
-        ToolbarKey.ARROW_LEFT, ToolbarKey.ARROW_UP,
-        ToolbarKey.ARROW_DOWN, ToolbarKey.ARROW_RIGHT,
-    )
-    FilledTonalButton(
-        onClick = {},
-        modifier = Modifier.height(32.dp),
-        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-    ) {
-        Text(
-            label,
-            fontSize = if (isArrow) 16.sp else 11.sp,
-            lineHeight = if (isArrow) 16.sp else 11.sp,
-            fontWeight = if (isArrow) {
-                androidx.compose.ui.text.font.FontWeight.Bold
-            } else null,
-        )
     }
 }
 

@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">Tastatur-Toolbar</string>
     <string name="settings_toolbar_assign_hint">Jede Taste Zeile 1, Zeile 2 oder Aus zuweisen</string>
     <string name="settings_toolbar_arrow_keys">Pfeiltasten-Layout</string>
+    <string name="settings_toolbar_edit_controls">Steuerung im Bearbeitungsmodus</string>
+    <string name="settings_edit_controls_split">Geteilt</string>
+    <string name="settings_edit_controls_left">Links</string>
+    <string name="settings_edit_controls_right">Rechts</string>
     <string name="settings_toolbar_function_keys">Funktionstasten</string>
     <string name="settings_toolbar_symbols">Symbole</string>
     <string name="settings_toolbar_custom_keys">Benutzerdefinierte Tasten</string>

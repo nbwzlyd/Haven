@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">Barre d\'outils clavier</string>
     <string name="settings_toolbar_assign_hint">Assigner chaque touche : Ligne 1, Ligne 2 ou Désactivé</string>
     <string name="settings_toolbar_arrow_keys">Disposition des flèches</string>
+    <string name="settings_toolbar_edit_controls">Commandes du mode édition</string>
+    <string name="settings_edit_controls_split">Séparé</string>
+    <string name="settings_edit_controls_left">Gauche</string>
+    <string name="settings_edit_controls_right">Droite</string>
     <string name="settings_toolbar_function_keys">Touches de fonction</string>
     <string name="settings_toolbar_symbols">Symboles</string>
     <string name="settings_toolbar_custom_keys">Touches personnalisées</string>

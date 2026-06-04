@@ -20,6 +20,7 @@ import sh.haven.core.data.agent.AgentConsentManager
 import sh.haven.core.data.backup.BackupService
 import sh.haven.core.data.db.AgentAuditEventDao
 import sh.haven.core.data.font.TerminalFontInstaller
+import sh.haven.core.data.preferences.EditModeControlsPlacement
 import sh.haven.core.data.preferences.NavBlockMode
 import sh.haven.core.data.preferences.ToolbarLayout
 import sh.haven.core.data.preferences.UserPreferencesRepository
@@ -423,6 +424,14 @@ class SettingsViewModel @Inject constructor(
             NavBlockMode.ALIGNED,
         )
 
+    val editModeControlsPlacement: StateFlow<EditModeControlsPlacement> =
+        preferencesRepository.editModeControlsPlacement
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5000),
+                EditModeControlsPlacement.SPLIT,
+            )
+
     val toolbarMinButtonWidth: StateFlow<Int> = preferencesRepository.toolbarMinButtonWidth
         .stateIn(
             viewModelScope,
@@ -685,6 +694,12 @@ class SettingsViewModel @Inject constructor(
     fun setNavBlockMode(mode: NavBlockMode) {
         viewModelScope.launch {
             preferencesRepository.setNavBlockMode(mode)
+        }
+    }
+
+    fun setEditModeControlsPlacement(placement: EditModeControlsPlacement) {
+        viewModelScope.launch {
+            preferencesRepository.setEditModeControlsPlacement(placement)
         }
     }
 

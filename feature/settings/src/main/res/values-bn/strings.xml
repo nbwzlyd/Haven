@@ -155,6 +155,10 @@
     <string name="settings_toolbar_dialog_title">কীবোর্ড টুলবার</string>
     <string name="settings_toolbar_assign_hint">প্রতিটি কী সারি ১, সারি ২, বা বন্ধ-এ নির্ধারণ করুন</string>
     <string name="settings_toolbar_arrow_keys">অ্যারো কী লেআউট</string>
+    <string name="settings_toolbar_edit_controls">সম্পাদনা মোডের নিয়ন্ত্রণ</string>
+    <string name="settings_edit_controls_split">বিভক্ত</string>
+    <string name="settings_edit_controls_left">বাম</string>
+    <string name="settings_edit_controls_right">ডান</string>
     <string name="settings_toolbar_function_keys">ফাংশন কী</string>
     <string name="settings_toolbar_symbols">প্রতীক</string>
     <string name="settings_toolbar_custom_keys">কাস্টম কী</string>

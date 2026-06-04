@@ -182,6 +182,10 @@
     <string name="settings_toolbar_dialog_title">Keyboard toolbar</string>
     <string name="settings_toolbar_assign_hint">Assign each key to Row 1, Row 2, or Off</string>
     <string name="settings_toolbar_arrow_keys">Arrow keys layout</string>
+    <string name="settings_toolbar_edit_controls">Edit-mode controls</string>
+    <string name="settings_edit_controls_split">Split</string>
+    <string name="settings_edit_controls_left">Left</string>
+    <string name="settings_edit_controls_right">Right</string>
     <string name="settings_toolbar_min_key_width">Minimum key width: %1$d dp</string>
     <string name="settings_toolbar_function_keys">Function keys</string>
     <string name="settings_toolbar_symbols">Symbols</string>

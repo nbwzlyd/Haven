@@ -167,6 +167,10 @@
     <string name="settings_toolbar_dialog_title">키보드 도구 모음</string>
     <string name="settings_toolbar_assign_hint">각 키를 1행, 2행 또는 끄기에 할당하세요</string>
     <string name="settings_toolbar_arrow_keys">화살표 키 레이아웃</string>
+    <string name="settings_toolbar_edit_controls">편집 모드 컨트롤</string>
+    <string name="settings_edit_controls_split">분할</string>
+    <string name="settings_edit_controls_left">왼쪽</string>
+    <string name="settings_edit_controls_right">오른쪽</string>
     <string name="settings_toolbar_function_keys">기능 키</string>
     <string name="settings_toolbar_symbols">기호</string>
     <string name="settings_toolbar_custom_keys">사용자 지정 키</string>
