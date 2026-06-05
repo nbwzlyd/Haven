@@ -340,6 +340,9 @@
     <string name="connections_local_shell_proot_desc">Запускает оболочку Alpine Linux локально через PRoot. При первом использовании загружает минимальный rootfs (~4 МБ). Root и сетевое подключение не нужны.</string>
     <string name="connections_dropdown_select_provider">Выберите поставщика…</string>
     <string name="connections_helper_rclone_signin">Войдите через браузер при первом подключении.</string>
+    <string name="connections_helper_rclone_credentials">Введите данные учётной записи этого провайдера, затем нажмите «Настроить», чтобы сохранить и проверить удалённое хранилище.</string>
+    <string name="connections_rclone_configure">Настроить и проверить</string>
+    <string name="connections_rclone_configured_ok">Удалённое хранилище настроено и проверено.</string>
     <string name="connections_dropdown_select_ssh">Выберите SSH-подключение</string>
     <string name="connections_helper_add_ssh_first">Сначала добавьте SSH-подключение</string>
     <string name="connections_toggle_rdp_nla">Аутентификация на уровне сети (NLA)</string>

@@ -340,6 +340,9 @@
     <string name="connections_local_shell_proot_desc">يشغّل صدفة Alpine Linux محليًا عبر PRoot. ينزّل نظام جذر أدنى (~4 ميجابايت) عند أول استخدام. لا حاجة إلى الجذر أو اتصال بالشبكة.</string>
     <string name="connections_dropdown_select_provider">اختر مزوّدًا…</string>
     <string name="connections_helper_rclone_signin">سجّل الدخول عبر متصفحك عند أول اتصال.</string>
+    <string name="connections_helper_rclone_credentials">أدخل تفاصيل حساب هذا المزوّد، ثم اضغط تهيئة لحفظ السجل البعيد والتحقق منه.</string>
+    <string name="connections_rclone_configure">تهيئة والتحقق</string>
+    <string name="connections_rclone_configured_ok">تمت تهيئة السجل البعيد والتحقق منه.</string>
     <string name="connections_dropdown_select_ssh">اختر اتصال SSH</string>
     <string name="connections_helper_add_ssh_first">أضِف اتصال SSH أولًا</string>
     <string name="connections_toggle_rdp_nla">مصادقة على مستوى الشبكة (NLA)</string>

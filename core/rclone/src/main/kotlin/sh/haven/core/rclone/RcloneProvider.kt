@@ -1,5 +1,14 @@
 package sh.haven.core.rclone
 
+/**
+ * rclone providers Haven configures via the OAuth browser flow — the token is
+ * obtained interactively, with no credentials typed up front. Every other
+ * provider is treated as a CREDENTIALS provider: its required options are
+ * collected in the connection editor and written via `config/create` (#181,
+ * e.g. Filen needs email/password/api_key; also unblocks s3/b2/mega/sftp/…).
+ */
+val RCLONE_OAUTH_PROVIDERS: Set<String> = setOf("drive", "dropbox", "onedrive", "box", "pcloud")
+
 /** Metadata about an rclone storage provider (e.g. Google Drive, S3). */
 data class ProviderInfo(
     /** Internal name, e.g. "drive", "s3", "dropbox". */

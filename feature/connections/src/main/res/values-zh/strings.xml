@@ -338,6 +338,9 @@
     <string name="connections_local_shell_proot_desc">通过 PRoot 在本地运行 Alpine Linux shell。首次使用时下载最小 rootfs（约 4MB）。无需 root 或网络连接。</string>
     <string name="connections_dropdown_select_provider">选择提供商…</string>
     <string name="connections_helper_rclone_signin">首次连接时通过浏览器登录。</string>
+    <string name="connections_helper_rclone_credentials">输入此提供商的账户信息，然后点按配置以保存并验证远程。</string>
+    <string name="connections_rclone_configure">配置并验证</string>
+    <string name="connections_rclone_configured_ok">远程已配置并验证。</string>
     <string name="connections_dropdown_select_ssh">选择 SSH 连接</string>
     <string name="connections_helper_add_ssh_first">请先添加一个 SSH 连接</string>
     <string name="connections_toggle_rdp_nla">网络级身份验证 (NLA)</string>

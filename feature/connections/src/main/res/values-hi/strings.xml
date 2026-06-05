@@ -340,6 +340,9 @@
     <string name="connections_local_shell_proot_desc">PRoot के माध्यम से स्थानीय रूप से Alpine Linux शेल चलाता है। पहली बार उपयोग पर एक न्यूनतम rootfs (~4MB) डाउनलोड करता है। root या नेटवर्क कनेक्शन की आवश्यकता नहीं।</string>
     <string name="connections_dropdown_select_provider">प्रदाता चुनें…</string>
     <string name="connections_helper_rclone_signin">पहली बार कनेक्ट करते समय अपने ब्राउज़र से साइन इन करें।</string>
+    <string name="connections_helper_rclone_credentials">इस प्रदाता के खाते का विवरण दर्ज करें, फिर रिमोट को सहेजने और सत्यापित करने के लिए कॉन्फ़िगर पर टैप करें।</string>
+    <string name="connections_rclone_configure">कॉन्फ़िगर करें और सत्यापित करें</string>
+    <string name="connections_rclone_configured_ok">रिमोट कॉन्फ़िगर और सत्यापित किया गया।</string>
     <string name="connections_dropdown_select_ssh">SSH कनेक्शन चुनें</string>
     <string name="connections_helper_add_ssh_first">पहले एक SSH कनेक्शन जोड़ें</string>
     <string name="connections_toggle_rdp_nla">नेटवर्क स्तर प्रमाणीकरण (NLA)</string>

@@ -79,9 +79,11 @@ import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.hilt.navigation.compose.hiltViewModel
 import sh.haven.core.data.db.entities.ConnectionProfile
 import sh.haven.core.data.preferences.UserPreferencesRepository
+import sh.haven.core.rclone.RCLONE_OAUTH_PROVIDERS
 import sh.haven.core.knock.KnockSequence
 import sh.haven.core.spa.SpaConfig
 import sh.haven.feature.tunnel.CloudflareAccessLoginContract
@@ -1132,6 +1134,7 @@ fun ConnectionEditDialog(
                         "mega" to "MEGA",
                         "pcloud" to "pCloud",
                         "box" to "Box",
+                        "filen" to "Filen",
                     )
                     var providerExpanded by remember { mutableStateOf(false) }
                     ExposedDropdownMenuBox(
@@ -1169,11 +1172,83 @@ fun ConnectionEditDialog(
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(
-                        stringResource(R.string.connections_helper_rclone_signin),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (rcloneProvider.isBlank() || rcloneProvider in RCLONE_OAUTH_PROVIDERS) {
+                        // OAuth providers (Drive/Dropbox/…) authenticate via the
+                        // browser flow on first connect — no fields to fill here.
+                        Text(
+                            stringResource(R.string.connections_helper_rclone_signin),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        // Non-OAuth providers (Filen, s3, b2, mega, sftp, …):
+                        // collect the rclone-declared required fields and write
+                        // the remote via config/create (#181).
+                        val rcloneCfgVm: RcloneConfigViewModel = hiltViewModel()
+                        val rcloneOptions by rcloneCfgVm.options.collectAsState()
+                        val rcloneCfgStatus by rcloneCfgVm.status.collectAsState()
+                        val rcloneParams = remember(rcloneProvider) { mutableStateMapOf<String, String>() }
+                        LaunchedEffect(rcloneProvider) { rcloneCfgVm.loadOptions(rcloneProvider) }
+                        Text(
+                            stringResource(R.string.connections_helper_rclone_credentials),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        rcloneOptions.forEach { opt ->
+                            OutlinedTextField(
+                                value = rcloneParams[opt.name] ?: opt.default,
+                                onValueChange = {
+                                    rcloneParams[opt.name] = it
+                                    rcloneCfgVm.clearStatus()
+                                },
+                                label = {
+                                    Text(opt.name.replace('_', ' ').replaceFirstChar { c -> c.uppercase() })
+                                },
+                                singleLine = true,
+                                supportingText = opt.help.takeIf { it.isNotBlank() }?.let {
+                                    { Text(it, style = MaterialTheme.typography.labelSmall) }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(4.dp))
+                        }
+                        val requiredFilled = rcloneOptions.filter { it.required }
+                            .all { (rcloneParams[it.name] ?: it.default).isNotBlank() }
+                        OutlinedButton(
+                            onClick = {
+                                val name = rcloneRemoteName.ifBlank { rcloneProvider }
+                                val params = rcloneOptions
+                                    .associate { it.name to (rcloneParams[it.name] ?: it.default) }
+                                    .filterValues { it.isNotBlank() }
+                                rcloneCfgVm.configure(name, rcloneProvider, params)
+                            },
+                            enabled = requiredFilled &&
+                                rcloneCfgStatus != RcloneConfigViewModel.Status.Working,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            if (rcloneCfgStatus == RcloneConfigViewModel.Status.Working) {
+                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(stringResource(R.string.connections_rclone_configure))
+                        }
+                        when (val s = rcloneCfgStatus) {
+                            is RcloneConfigViewModel.Status.Success -> Text(
+                                stringResource(R.string.connections_rclone_configured_ok),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                            is RcloneConfigViewModel.Status.Error -> Text(
+                                s.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                            else -> {}
+                        }
+                    }
                 } else if (connectionType == "VNC") {
                     ConnectionSection(stringResource(R.string.connections_section_vnc))
                     // VNC: same shape as RDP — tunnel toggle first (it changes
@@ -2755,6 +2830,7 @@ fun ConnectionEditDialog(
                                     "mega" -> "MEGA"
                                     "pcloud" -> "pCloud"
                                     "box" -> "Box"
+                                    "filen" -> "Filen"
                                     else -> rcloneProvider
                                 }
                                 providerLabel

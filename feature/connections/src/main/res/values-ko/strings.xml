@@ -332,6 +332,9 @@
     <string name="connections_local_shell_proot_desc">PRoot를 통해 Alpine Linux 셸을 로컬에서 실행합니다. 처음 사용할 때 최소 rootfs(~4MB)를 다운로드합니다. root나 네트워크 연결이 필요하지 않습니다.</string>
     <string name="connections_dropdown_select_provider">공급자 선택…</string>
     <string name="connections_helper_rclone_signin">처음 연결할 때 브라우저를 통해 로그인하세요.</string>
+    <string name="connections_helper_rclone_credentials">이 제공업체의 계정 정보를 입력한 다음 구성을 눌러 원격을 저장하고 확인하세요.</string>
+    <string name="connections_rclone_configure">구성 및 확인</string>
+    <string name="connections_rclone_configured_ok">원격이 구성되고 확인되었습니다.</string>
     <string name="connections_dropdown_select_ssh">SSH 연결 선택</string>
     <string name="connections_helper_add_ssh_first">먼저 SSH 연결을 추가하세요</string>
     <string name="connections_toggle_rdp_nla">네트워크 수준 인증(NLA)</string>

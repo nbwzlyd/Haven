@@ -340,6 +340,9 @@
     <string name="connections_local_shell_proot_desc">Ejecuta un shell de Alpine Linux localmente mediante PRoot. Descarga un rootfs mínimo (~4 MB) en el primer uso. No requiere root ni conexión de red.</string>
     <string name="connections_dropdown_select_provider">Seleccionar proveedor…</string>
     <string name="connections_helper_rclone_signin">Inicia sesión en tu navegador la primera vez que conectes.</string>
+    <string name="connections_helper_rclone_credentials">Introduce los datos de la cuenta de este proveedor y pulsa Configurar para guardar y verificar el remoto.</string>
+    <string name="connections_rclone_configure">Configurar y verificar</string>
+    <string name="connections_rclone_configured_ok">Remoto configurado y verificado.</string>
     <string name="connections_dropdown_select_ssh">Seleccionar conexión SSH</string>
     <string name="connections_helper_add_ssh_first">Añade primero una conexión SSH</string>
     <string name="connections_toggle_rdp_nla">Autenticación a nivel de red (NLA)</string>

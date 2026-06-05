@@ -340,6 +340,9 @@
     <string name="connections_local_shell_proot_desc">PRoot経由でAlpine Linuxシェルをローカルで実行します。初回使用時に最小限のrootfs（約4MB）をダウンロードします。rootやネットワーク接続は不要です。</string>
     <string name="connections_dropdown_select_provider">プロバイダーを選択…</string>
     <string name="connections_helper_rclone_signin">初回接続時にブラウザでサインインしてください。</string>
+    <string name="connections_helper_rclone_credentials">このプロバイダーのアカウント情報を入力し、「設定」をタップしてリモートを保存・確認します。</string>
+    <string name="connections_rclone_configure">設定して確認</string>
+    <string name="connections_rclone_configured_ok">リモートを設定し、確認しました。</string>
     <string name="connections_dropdown_select_ssh">SSH接続を選択</string>
     <string name="connections_helper_add_ssh_first">先にSSH接続を追加してください</string>
     <string name="connections_toggle_rdp_nla">ネットワークレベル認証 (NLA)</string>
