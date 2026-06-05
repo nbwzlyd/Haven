@@ -48,8 +48,11 @@ class RcloneConfigViewModel @Inject constructor(
     private var loadedProvider: String? = null
 
     /**
-     * Load the credential fields for [provider] (required + non-advanced). Safe
-     * to call repeatedly; only re-queries rclone when the provider changes.
+     * Load the basic config fields for [provider] (all non-advanced options).
+     * Not just the `required` ones: rclone marks many essential fields optional
+     * because they have defaults (e.g. FTP's user/port/pass), so a required-only
+     * filter would hide them and leave the provider unconfigurable. Safe to call
+     * repeatedly; only re-queries rclone when the provider changes.
      */
     fun loadOptions(provider: String) {
         if (provider == loadedProvider) return
@@ -67,7 +70,7 @@ class RcloneConfigViewModel @Inject constructor(
                         .firstOrNull { it.name == provider }
                         ?.options
                         .orEmpty()
-                        .filter { it.required && !it.advanced }
+                        .filter { !it.advanced }
                 }.getOrDefault(emptyList())
             }
             // Ignore a stale result if the user changed provider mid-load.

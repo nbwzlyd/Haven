@@ -200,6 +200,47 @@ internal class McpTools(
             inputSchema = emptyObjectSchema(),
         ) { _ -> listRcloneRemotes() },
 
+        "list_rclone_provider_options" to ToolHandler(
+            description = "List a credentials-based rclone provider's basic config fields — the non-advanced options needed to configure a non-OAuth remote (ftp, sftp, webdav, s3, b2, mega, filen, …). Each entry has name, help, required, isPassword, default, type. Feed the collected values into configure_rclone_remote's `parameters`. OAuth providers (drive, dropbox, onedrive, box, pcloud) are configured via the in-app browser sign-in, not this. (#181)",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("provider", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "rclone provider/type, e.g. 'ftp', 'sftp', 's3', 'filen'.")
+                    })
+                })
+                put("required", JSONArray().put("provider"))
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> listRcloneProviderOptions(args) },
+
+        "configure_rclone_remote" to ToolHandler(
+            description = "Create (or replace) a credentials-based rclone remote and verify it by listing the root. Pass remoteName, provider (ftp/sftp/webdav/s3/b2/mega/filen/…), and parameters — an option→value map (see list_rclone_provider_options; rclone obscures password fields server-side). For OAuth providers (drive/dropbox/…) use the in-app browser sign-in instead. Returns { created, verified, entryCount } or an error. Makes the remote usable by the rclone list/sync tools. (#181)",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("remoteName", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Name for the remote in rclone.conf, e.g. 'myftp'. Replaces an existing remote of the same name.")
+                    })
+                    put("provider", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "rclone provider/type, e.g. 'ftp', 'sftp', 's3', 'filen'.")
+                    })
+                    put("parameters", JSONObject().apply {
+                        put("type", "object")
+                        put("description", "Option→value map for the provider (from list_rclone_provider_options), e.g. {\"host\":\"…\",\"user\":\"…\",\"pass\":\"…\",\"port\":\"2121\"}. Password fields are obscured by rclone.")
+                    })
+                })
+                put("required", JSONArray().put("remoteName").put("provider").put("parameters"))
+            },
+            consentLevel = ConsentLevel.EVERY_CALL,
+            summarise = { args ->
+                "Configure rclone remote \"${args.optString("remoteName")}\" (${args.optString("provider")})?"
+            },
+        ) { args -> configureRcloneRemote(args) },
+
         "list_directory" to ToolHandler(
             description = "List entries at a path on any connected backend (local, SSH/SFTP, SMB, rclone). Resolves the right driver from profileId — pass the literal string 'local' for the device filesystem, otherwise a profile ID from list_connections. Returns name, path, isDir, size, modTime, permissions, and mimeType for each entry. Replaces list_sftp_directory and list_rclone_directory; those still work as deprecated aliases.",
             inputSchema = JSONObject().apply {
@@ -5703,6 +5744,79 @@ internal class McpTools(
             }
         } catch (e: Exception) {
             throw McpError(-32603, "Failed to list $remote:$path : ${e.message}")
+        }
+    }
+
+    /** #181: introspect a provider's basic (non-advanced) config fields. */
+    private fun listRcloneProviderOptions(args: JSONObject): JSONObject {
+        val provider = args.optString("provider").ifEmpty {
+            throw McpError(-32602, "Missing required argument: provider")
+        }
+        return try {
+            ensureRcloneReady()
+            val info = rcloneClient.listProviders().firstOrNull { it.name == provider }
+                ?: throw McpError(-32603, "Unknown rclone provider: $provider")
+            JSONObject().apply {
+                put("provider", provider)
+                put("description", info.description)
+                put("options", JSONArray().apply {
+                    info.options.filter { !it.advanced }.forEach { o ->
+                        put(JSONObject().apply {
+                            put("name", o.name)
+                            put("help", o.help)
+                            put("required", o.required)
+                            put("isPassword", o.isPassword)
+                            put("default", o.default)
+                            put("type", o.type)
+                        })
+                    }
+                })
+            }
+        } catch (e: McpError) {
+            throw e
+        } catch (e: Exception) {
+            throw McpError(-32603, "Failed to list provider options for $provider: ${e.message}")
+        }
+    }
+
+    /**
+     * #181: create/replace a credentials-based rclone remote and verify it by
+     * listing the root. Mirrors the connection editor's "Configure & verify"
+     * (RcloneConfigViewModel) so the non-OAuth flow is MCP-drivable for testing.
+     */
+    private fun configureRcloneRemote(args: JSONObject): JSONObject {
+        val name = args.optString("remoteName").ifEmpty {
+            throw McpError(-32602, "Missing required argument: remoteName")
+        }
+        val provider = args.optString("provider").ifEmpty {
+            throw McpError(-32602, "Missing required argument: provider")
+        }
+        val paramsJson = args.optJSONObject("parameters")
+            ?: throw McpError(-32602, "Missing required argument: parameters")
+        val params = mutableMapOf<String, String>()
+        paramsJson.keys().forEach { k -> params[k] = paramsJson.get(k).toString() }
+        return try {
+            ensureRcloneReady()
+            if (name in rcloneClient.listRemotes()) rcloneClient.deleteRemote(name)
+            val state = rcloneClient.createRemote(name, provider, params)
+            if (state.error.isNotEmpty()) {
+                throw McpError(-32603, "rclone config/create error: ${state.error}")
+            }
+            state.option?.let {
+                throw McpError(-32603, "rclone still needs option '${it.name}' — add it to parameters")
+            }
+            val entries = rcloneClient.listDirectory(name, "")
+            JSONObject().apply {
+                put("created", true)
+                put("verified", true)
+                put("remoteName", name)
+                put("provider", provider)
+                put("entryCount", entries.size)
+            }
+        } catch (e: McpError) {
+            throw e
+        } catch (e: Exception) {
+            throw McpError(-32603, "configure_rclone_remote failed: ${e.message}")
         }
     }
 
