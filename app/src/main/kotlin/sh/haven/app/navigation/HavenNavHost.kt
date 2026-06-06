@@ -199,15 +199,15 @@ fun HavenNavHost(
     // page. Anchoring to the Screen *identity* keeps the page locked to the
     // selection across any set/order change.
     //
-    // Initialised from the pager's restored page so a config-change / process
-    // restore starts aligned; the settle effect below keeps it in lockstep
-    // with manual swipes.
-    var selectedScreen by remember {
-        mutableStateOf(
-            screens.getOrNull(pagerState.currentPage) ?: screens.firstOrNull() ?: Screen.Connections,
-        )
-    }
-    fun requestScreen(screen: Screen) { selectedScreen = screen }
+    // Hoisted out of this composition into an Activity-scoped ViewModel so the
+    // selection survives HavenNavHost leaving + re-entering the composition when
+    // a PiP app-window swaps the whole nav host out (MainActivity) — otherwise a
+    // fresh `remember` re-initialised it to page 0 (Connections) on PiP-exit and
+    // the user lost their place. SavedStateHandle also carries it across process
+    // death. See NavStateViewModel.
+    val navStateViewModel: NavStateViewModel = hiltViewModel()
+    val selectedScreen by navStateViewModel.selectedScreen.collectAsState()
+    fun requestScreen(screen: Screen) { navStateViewModel.select(screen) }
     // RENDER follows SELECTION: re-scroll whenever the selection changes OR
     // the available screens change (filter/reorder), so the visible page is
     // always the selected Screen. Instant scroll (not animated) so a tap
@@ -227,7 +227,7 @@ fun HavenNavHost(
     // never clobbered by a screens-list change before the scroll lands.
     LaunchedEffect(pagerState.settledPage) {
         screens.getOrNull(pagerState.settledPage)?.let { settled ->
-            if (settled != selectedScreen) selectedScreen = settled
+            if (settled != selectedScreen) requestScreen(settled)
         }
     }
 
