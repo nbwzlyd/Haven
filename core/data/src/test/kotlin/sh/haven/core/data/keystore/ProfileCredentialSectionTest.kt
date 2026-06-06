@@ -32,12 +32,14 @@ class ProfileCredentialSectionTest {
         vncPassword: String? = null,
         rdpPassword: String? = null,
         smbPassword: String? = null,
+        proxyPassword: String? = null,
     ) = ConnectionProfile(
         id = id, label = label, host = "10.0.0.1", username = "u",
         sshPassword = sshPassword,
         vncPassword = vncPassword,
         rdpPassword = rdpPassword,
         smbPassword = smbPassword,
+        proxyPassword = proxyPassword,
     )
 
     private fun newSection(profiles: List<ConnectionProfile>): Pair<ProfileCredentialSection, ConnectionDao> {
@@ -61,6 +63,30 @@ class ProfileCredentialSectionTest {
         val (section, _) = newSection(listOf(p))
         val ids = section.enumerate().map { it.id }
         assertEquals(setOf("p1/sshPassword", "p1/vncPassword", "p1/smbPassword"), ids.toSet())
+    }
+
+    @Test
+    fun `enumerate includes the proxy password (issue 227)`() = runTest {
+        // #227 added proxyPassword; it must be encrypted at rest like the
+        // other credential columns and therefore appear in the audit/wipe
+        // surface, not silently as plaintext.
+        val p = profile(sshPassword = "ENC:x", proxyPassword = "ENC:proxy")
+        val (section, _) = newSection(listOf(p))
+        val ids = section.enumerate().map { it.id }
+        assertTrue("proxyPassword must be auditable", "p1/proxyPassword" in ids)
+    }
+
+    @Test
+    fun `wipe clears the proxy password column`() = runTest {
+        val p = profile(sshPassword = "ENC:keep", proxyPassword = "ENC:remove")
+        val (section, dao) = newSection(listOf(p))
+        val captured = slot<ConnectionProfile>()
+        coEvery { dao.upsert(capture(captured)) } returns Unit
+
+        assertTrue(section.wipe("p1/proxyPassword"))
+        val saved = captured.captured
+        assertEquals(null, saved.proxyPassword)
+        assertEquals("ENC:keep", saved.sshPassword)
     }
 
     @Test

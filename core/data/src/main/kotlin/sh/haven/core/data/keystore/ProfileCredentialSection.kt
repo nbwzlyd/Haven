@@ -56,6 +56,9 @@ class ProfileCredentialSection @Inject constructor(
         Field("smbPassword", "SMB password",
             { it.smbPassword },
             { p, v -> p.copy(smbPassword = v) }),
+        Field("proxyPassword", "proxy password",
+            { it.proxyPassword },
+            { p, v -> p.copy(proxyPassword = v) }),
     )
 
     override suspend fun enumerate(): List<KeystoreEntry> {
