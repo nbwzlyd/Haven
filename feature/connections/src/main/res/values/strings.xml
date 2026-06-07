@@ -383,6 +383,13 @@
     <string name="connections_field_email_mailbox_password">Mailbox password (two-password mode only)</string>
     <string name="connections_email_mailbox_password_hint">Leave blank unless your Proton account has a separate mailbox password.</string>
     <string name="connections_email_2fa_hint">If your account has 2FA, link its TOTP secret in the SSH key / TOTP manager and it will be applied automatically.</string>
+    <string name="connections_email_provider_proton_short">ProtonMail</string>
+    <string name="connections_email_provider_imap_short">IMAP/SMTP</string>
+    <string name="connections_email_app_password_hint">Use your password, or an app-password if your provider requires one (Fastmail, iCloud, Yahoo, Gmail/2FA).</string>
+    <string name="connections_field_imap_server">IMAP server</string>
+    <string name="connections_field_imap_port">IMAP port</string>
+    <string name="connections_field_smtp_port">SMTP port</string>
+    <string name="connections_toggle_imap_tls">Use TLS (implicit SSL)</string>
     <string name="connections_section_connection">Connection</string>
     <string name="connections_section_terminal">Terminal</string>
     <string name="connections_section_authentication">Authentication</string>

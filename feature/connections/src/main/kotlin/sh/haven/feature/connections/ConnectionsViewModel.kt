@@ -1744,46 +1744,33 @@ class ConnectionsViewModel @Inject constructor(
             try {
                 repository.markConnected(profile.id)
 
-                // Pre-connect SPA/knock (R1). For Proton the SOCKS destination is
-                // Proton's own servers, so any knock/SPA configured here guards the
-                // user's tunnel ingress (profile.host) and fires before the tunnel
-                // handshake — the receipt lands in this profile's connection log.
+                // Pre-connect SPA/knock (R1) — guards the user's tunnel ingress
+                // (profile.host) before any tunnel/transport resolves, for every
+                // email provider. The receipt lands in this profile's log.
                 buildKnockHook(profile, verbose)?.invoke()
-
-                // Route Proton's HTTPS through the per-profile tunnel's SOCKS5
-                // listener. MailBridge wants a bare host:port (it prepends the
-                // socks5:// scheme itself) — NOT a URL like connectRclone passes.
-                val socks = tunnelResolver.socksEndpoint(profile)
-                    ?.let { "${it.hostString}:${it.port}" }
-                if (profile.tunnelConfigId != null && socks == null) {
-                    // Fail closed (R7): a tunnel is configured but yields no SOCKS
-                    // endpoint (e.g. Cloudflare Access) — refuse rather than leak
-                    // Proton traffic onto the clearnet.
-                    throw IllegalStateException(
-                        "Tunnel configured but provides no SOCKS endpoint — refusing to connect Proton directly.",
-                    )
-                }
 
                 val username = (profile.emailUsername ?: profile.username).trim()
                 val password = profile.emailPassword.orEmpty()
                 if (username.isBlank() || password.isBlank()) {
-                    throw IllegalStateException("Proton username and password are required.")
+                    throw IllegalStateException("Email username and password are required.")
                 }
-                val sessionId = mailSessionManager.registerSession(
-                    profile.id, profile.label, MailEngine.PROTON,
-                )
+
+                // Provider selects the engine + transport: Proton rides the
+                // tunnel's SOCKS5 listener (FFI consumer); IMAP rides a JVM
+                // SocketFactory. Both fail closed when a tunnel is configured but
+                // yields no transport (R7) rather than leaking onto the clearnet.
+                val isImap = profile.emailProvider?.equals("imap", ignoreCase = true) == true
+                val engine = if (isImap) MailEngine.IMAP else MailEngine.PROTON
+                val params = if (isImap) {
+                    buildImapParams(profile, username, password)
+                } else {
+                    buildProtonParams(profile, username, password)
+                }
+
+                val sessionId = mailSessionManager.registerSession(profile.id, profile.label, engine)
 
                 try {
-                    mailSessionManager.connectSession(
-                        sessionId = sessionId,
-                        params = MailConnectParams.Proton(
-                            username = username,
-                            password = password,
-                            mailboxPassword = profile.emailMailboxPassword?.ifBlank { null },
-                            twoFA = resolveEmailTotp(profile),
-                            socks = socks,
-                        ),
-                    )
+                    mailSessionManager.connectSession(sessionId, params)
                 } catch (e: MailException.MailboxPasswordRequired) {
                     throw IllegalStateException(
                         "This Proton account uses a separate mailbox password — add it in Edit → Email.",
@@ -1799,7 +1786,7 @@ class ConnectionsViewModel @Inject constructor(
                     profileId = profile.id,
                     status = ConnectionLog.Status.CONNECTED,
                     durationMs = System.currentTimeMillis() - startedAt,
-                    details = "Proton mail connected",
+                    details = if (isImap) "IMAP mail connected" else "Proton mail connected",
                     verboseLog = verbose.drain(),
                 )
             } catch (e: Exception) {
@@ -1816,6 +1803,63 @@ class ConnectionsViewModel @Inject constructor(
                 _connectingProfileId.value = null
             }
         }
+    }
+
+    /**
+     * Proton transport: route HTTPS through the per-profile tunnel's SOCKS5
+     * listener. MailBridge wants a bare `host:port` (it prepends `socks5://`
+     * itself) — NOT a URL. Fail closed (R7) when a tunnel is configured but
+     * yields no SOCKS endpoint (e.g. Cloudflare Access).
+     */
+    private suspend fun buildProtonParams(
+        profile: ConnectionProfile,
+        username: String,
+        password: String,
+    ): MailConnectParams.Proton {
+        val socks = tunnelResolver.socksEndpoint(profile)
+            ?.let { "${it.hostString}:${it.port}" }
+        if (profile.tunnelConfigId != null && socks == null) {
+            throw IllegalStateException(
+                "Tunnel configured but provides no SOCKS endpoint — refusing to connect Proton directly.",
+            )
+        }
+        return MailConnectParams.Proton(
+            username = username,
+            password = password,
+            mailboxPassword = profile.emailMailboxPassword?.ifBlank { null },
+            twoFA = resolveEmailTotp(profile),
+            socks = socks,
+        )
+    }
+
+    /**
+     * IMAP transport: route IMAP/SMTP through the per-profile tunnel via a JVM
+     * [javax.net.SocketFactory]. Fail closed (R7) when a tunnel is configured
+     * but yields no factory; a null factory with no tunnel is a normal direct
+     * connection.
+     */
+    private suspend fun buildImapParams(
+        profile: ConnectionProfile,
+        username: String,
+        password: String,
+    ): MailConnectParams.Imap {
+        val server = profile.emailServer?.trim().orEmpty()
+        if (server.isBlank()) throw IllegalStateException("IMAP server is required.")
+        val factory = tunnelResolver.socketFactory(profile)
+        if (profile.tunnelConfigId != null && factory == null) {
+            throw IllegalStateException(
+                "Tunnel configured but provides no socket factory — refusing to connect IMAP directly.",
+            )
+        }
+        return MailConnectParams.Imap(
+            username = username,
+            password = password,
+            server = server,
+            port = profile.emailPort,
+            smtpPort = profile.emailSmtpPort,
+            tls = profile.emailTls,
+            socketFactory = factory,
+        )
     }
 
     /**

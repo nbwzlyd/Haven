@@ -318,12 +318,16 @@ fun ConnectionEditDialog(
     var rnsHost by rememberSaveable { mutableStateOf(existing?.reticulumHost ?: "") }
     var rcloneRemoteName by rememberSaveable { mutableStateOf(existing?.rcloneRemoteName ?: "") }
     var rcloneProvider by rememberSaveable { mutableStateOf(existing?.rcloneProvider ?: "") }
-    // EMAIL (Proton in v1). emailProvider defaults to "proton" since that's the
-    // only v1 engine; generic IMAP/Gmail/Outlook land in stage 2.
+    // EMAIL engines: "proton" (Go bridge, SRP) or "imap" (JVM, password/app-
+    // password). Gmail/Outlook (OAuth) land in stage 2b on the same IMAP engine.
     var emailProvider by rememberSaveable { mutableStateOf(existing?.emailProvider ?: "proton") }
     var emailUsername by rememberSaveable { mutableStateOf(existing?.emailUsername ?: "") }
     var emailPassword by rememberSaveable { mutableStateOf(existing?.emailPassword ?: "") }
     var emailMailboxPassword by rememberSaveable { mutableStateOf(existing?.emailMailboxPassword ?: "") }
+    var emailServer by rememberSaveable { mutableStateOf(existing?.emailServer ?: "") }
+    var emailPort by rememberSaveable { mutableStateOf(existing?.emailPort?.toString() ?: "993") }
+    var emailSmtpPort by rememberSaveable { mutableStateOf(existing?.emailSmtpPort?.toString() ?: "465") }
+    var emailTls by rememberSaveable { mutableStateOf(existing?.emailTls ?: true) }
     var rnsPort by rememberSaveable { mutableStateOf(existing?.reticulumPort?.toString() ?: "4242") }
     var rnsNetworkName by rememberSaveable { mutableStateOf(existing?.reticulumNetworkName ?: "") }
     var rnsPassphrase by rememberSaveable { mutableStateOf(existing?.reticulumPassphrase ?: "") }
@@ -935,7 +939,7 @@ fun ConnectionEditDialog(
                     "RDP" to "RDP (Desktop)",
                     "SMB" to "SMB (File Share)",
                     "RCLONE" to "Cloud Storage (rclone)",
-                    "EMAIL" to "Email (ProtonMail)",
+                    "EMAIL" to "Email (Proton / IMAP)",
                     "RETICULUM" to "Reticulum",
                 )
                 var transportExpanded by remember { mutableStateOf(false) }
@@ -993,7 +997,7 @@ fun ConnectionEditDialog(
                                 "RDP" -> "My RDP Desktop"
                                 "SMB" -> "My File Share"
                                 "RCLONE" -> "My Google Drive"
-                                "EMAIL" -> "My Proton Mail"
+                                "EMAIL" -> "My Mail"
                                 "RETICULUM" -> "My Node"
                                 else -> "My Server"
                             }
@@ -1261,21 +1265,38 @@ fun ConnectionEditDialog(
                     }
                 } else if (connectionType == "EMAIL") {
                     ConnectionSection(stringResource(R.string.connections_section_email))
-                    Text(
-                        stringResource(R.string.connections_email_provider_proton),
-                        style = MaterialTheme.typography.bodyMedium,
+                    // Engine picker — one compact segmented row (portrait-friendly).
+                    val emailProviderOptions = listOf(
+                        "proton" to stringResource(R.string.connections_email_provider_proton_short),
+                        "imap" to stringResource(R.string.connections_email_provider_imap_short),
                     )
-                    Text(
-                        stringResource(R.string.connections_email_proton_unofficial_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
-                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        emailProviderOptions.forEachIndexed { index, (key, label) ->
+                            SegmentedButton(
+                                selected = emailProvider == key,
+                                onClick = { emailProvider = key },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = emailProviderOptions.size,
+                                ),
+                            ) { Text(label) }
+                        }
+                    }
+                    val isImapProvider = emailProvider.equals("imap", ignoreCase = true)
+                    if (!isImapProvider) {
+                        Text(
+                            stringResource(R.string.connections_email_proton_unofficial_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
                     OutlinedTextField(
                         value = emailUsername,
                         onValueChange = { emailUsername = it },
                         label = { Text(stringResource(R.string.connections_field_email_address)) },
-                        placeholder = { Text("you@proton.me") },
+                        placeholder = { Text(if (isImapProvider) "you@example.com" else "you@proton.me") },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                         modifier = Modifier.fillMaxWidth(),
@@ -1287,25 +1308,71 @@ fun ConnectionEditDialog(
                         label = stringResource(R.string.connections_field_email_password),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Spacer(Modifier.height(4.dp))
-                    sh.haven.core.ui.PasswordField(
-                        value = emailMailboxPassword,
-                        onValueChange = { emailMailboxPassword = it },
-                        label = stringResource(R.string.connections_field_email_mailbox_password),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        stringResource(R.string.connections_email_mailbox_password_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                    Text(
-                        stringResource(R.string.connections_email_2fa_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                    if (isImapProvider) {
+                        // Generic IMAP/SMTP fields — gated, so they never bloat the
+                        // dialog for Proton (the common case).
+                        Text(
+                            stringResource(R.string.connections_email_app_password_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        OutlinedTextField(
+                            value = emailServer,
+                            onValueChange = { emailServer = it },
+                            label = { Text(stringResource(R.string.connections_field_imap_server)) },
+                            placeholder = { Text("imap.example.com") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = emailPort,
+                                onValueChange = { emailPort = it.filter(Char::isDigit) },
+                                label = { Text(stringResource(R.string.connections_field_imap_port)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            OutlinedTextField(
+                                value = emailSmtpPort,
+                                onValueChange = { emailSmtpPort = it.filter(Char::isDigit) },
+                                label = { Text(stringResource(R.string.connections_field_smtp_port)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        BooleanToggleRow(
+                            label = stringResource(R.string.connections_toggle_imap_tls),
+                            checked = emailTls,
+                            onCheckedChange = { emailTls = it },
+                        )
+                    } else {
+                        Spacer(Modifier.height(4.dp))
+                        sh.haven.core.ui.PasswordField(
+                            value = emailMailboxPassword,
+                            onValueChange = { emailMailboxPassword = it },
+                            label = stringResource(R.string.connections_field_email_mailbox_password),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            stringResource(R.string.connections_email_mailbox_password_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                        Text(
+                            stringResource(R.string.connections_email_2fa_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 } else if (connectionType == "VNC") {
                     ConnectionSection(stringResource(R.string.connections_section_vnc))
                     // VNC: same shape as RDP — tunnel toggle first (it changes
@@ -2783,7 +2850,8 @@ fun ConnectionEditDialog(
                 "RDP" -> host.isNotBlank() && rdpUsername.isNotBlank() && (!rdpSshForward || rdpSshProfileId != null)
                 "SMB" -> host.isNotBlank() && smbShare.isNotBlank() && (!smbSshForward || smbSshProfileId != null)
                 "RCLONE" -> rcloneProvider.isNotBlank()
-                "EMAIL" -> emailUsername.isNotBlank() && emailPassword.isNotBlank()
+                "EMAIL" -> emailUsername.isNotBlank() && emailPassword.isNotBlank() &&
+                    (!emailProvider.equals("imap", ignoreCase = true) || emailServer.isNotBlank())
                 else -> destinationHash.length == 32 && (localSideband || rnsHost.isNotBlank())
             }
             TextButton(
@@ -2908,9 +2976,14 @@ fun ConnectionEditDialog(
                             host = host,
                             username = emailUsername,
                         )).copy(
-                            label = label.ifBlank { emailUsername.ifBlank { "Proton Mail" } },
+                            label = label.ifBlank {
+                                emailUsername.ifBlank {
+                                    if (emailProvider.equals("imap", true)) "Email" else "Proton Mail"
+                                }
+                            },
                             // host carries the optional tunnel-ingress/bastion that
-                            // SPA/knock guards; the mail server itself is Proton's.
+                            // SPA/knock guards; for Proton the mail server is Proton's,
+                            // for IMAP it's emailServer (reached through the tunnel).
                             host = host,
                             port = 0,
                             username = emailUsername,
@@ -2919,6 +2992,10 @@ fun ConnectionEditDialog(
                             emailUsername = emailUsername,
                             emailPassword = emailPassword.ifBlank { null },
                             emailMailboxPassword = emailMailboxPassword.ifBlank { null },
+                            emailServer = emailServer.ifBlank { null },
+                            emailPort = emailPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 993,
+                            emailSmtpPort = emailSmtpPort.toIntOrNull()?.takeIf { it in 1..65535 } ?: 465,
+                            emailTls = emailTls,
                             colorTag = colorTag,
                             groupId = groupId,
                             tunnelConfigId = tunnelConfigId,
