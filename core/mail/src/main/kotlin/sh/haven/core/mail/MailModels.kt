@@ -14,8 +14,8 @@ data class MailFolder(
     val color: String? = null,
     val parentId: String? = null,
 ) {
-    /** Proton system folders carry well-known stable ids. */
-    val isInbox: Boolean get() = id == INBOX_ID
+    /** Proton system folders carry well-known stable ids ("0"); IMAP's inbox is the fullName "INBOX". */
+    val isInbox: Boolean get() = id == INBOX_ID || id.equals("INBOX", ignoreCase = true)
 
     companion object {
         const val INBOX_ID = "0"

@@ -23,4 +23,9 @@ abstract class MailModule {
     @IntoMap
     @MailEngineKey(MailEngine.PROTON)
     abstract fun bindProtonClient(impl: ProtonMailClient): MailClient
+
+    @Binds
+    @IntoMap
+    @MailEngineKey(MailEngine.IMAP)
+    abstract fun bindImapClient(impl: ImapMailClient): MailClient
 }
