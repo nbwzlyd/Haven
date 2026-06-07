@@ -15,17 +15,37 @@ Goal: add an **EMAIL** connection type that, instead of a file view, opens a **K
 
 **Consequence — `gluon` dropped from v1.** Because `BuildRFC822` already decrypts to standard MIME, v1 calls `go-proton-api` directly and parses MIME on the Kotlin side with Apache Mime4j; `gluon` (the local IMAP-server layer) is only needed if we later expose Proton as on-device IMAP — deferred, not v1. (Earlier mentions of `gluon`/`emersion/go-message` in the diagrams below are historical; the shipped read path uses neither directly.)
 
-## Implementation status (2026-06-07)
+## Implementation status (updated 2026-06-07)
 
-The Proton read-only vertical slice is built and compiles end-to-end (`:app:compileX64DebugKotlin`). Scope was sharpened from the locked decisions above with the maintainer:
+**v1 (ProtonMail read-only) is built and device-verified end-to-end on a real *free* Proton account.** Committed on `main`: `09ca46de` (feature), `2bd43992` (session-registry wiring), `588bef87` (settings move). Scope was sharpened from the locked decisions above with the maintainer:
 
 - **v1 = ProtonMail read-only** (connect → folders → list → read decrypted message). **Send/compose deferred to v1.1** — the Go `send` path is a deliberate 501 stub; it's the hardest/riskiest piece (per-recipient encryption) and is kept off the first release.
 - **OAuth/XOAUTH2 token store deferred to Stage 2b** (built with the Gmail JVM engine that consumes it) — no dead encrypted-credential code in a Proton-only v1.
-- **Security layers in v1 = three working** (tunnel routing via `socksEndpoint`, native PGP via the bridge, SPA/port-knock pre-connect now wired into `connectEmail` — which `connectRclone` lacked). OAuth is the deferred fourth. SPA/knock for Proton guards the user's *tunnel ingress* (`profile.host`), not Proton's servers.
+- **Security layers in v1:** tunnel routing via `socksEndpoint` ✅ verified; native PGP via the bridge ✅ verified; SPA/port-knock pre-connect wired into `connectEmail` (which `connectRclone` lacked) — code present, **not yet exercised** against a guarded endpoint. OAuth is the deferred fourth. SPA/knock for Proton guards the user's *tunnel ingress* (`profile.host`), not Proton's servers.
 - **MIME parsing = Apache James Mime4j** (Apache-2.0); the reader renders **plain text only** (no WebView) so remote images/scripts never load.
 - **Reader/session security:** `saltedKeyPass` (keyring-unlock secret) is held in-memory only, never persisted in v1; re-auth on process death.
-- Built modules: `core/mail` (`MailClient`/`ProtonMailClient`/`MailSessionManager`), `feature/mail` (`MailScreen`/`MailViewModel`/`ProtonMailBackend`/`MimeParser`), `EMAIL` connection type + edit dialog + `connectEmail`, `Screen.Mail` nav, and read-only MCP tools (`list_mail_folders`/`list_mail_messages`/`read_mail_message`). DB schema 60→61.
-- **Not yet done:** on-device verification with a real Proton account (`appVersion` borrowed from rclone's working Drive default — unverified for Mail data endpoints); locale translations for the new strings; live staged 2FA/mailbox-password prompt (v1 reads stored mailbox password + a linked TOTP secret instead); wiring `WithUserAgent` in the Go bridge.
+- **Free account is sufficient** — we use the web/app API (not the paid Bridge). The `appVersion` is rclone's working Drive default `macos-drive@1.0.0-alpha.1+rclone`; **confirmed it also works for Proton Mail data endpoints**, so that risk is retired.
+- Built modules: `core/mail` (`MailClient`/`ProtonMailClient`/`MailSessionManager`), `feature/mail` (`MailScreen`/`MailViewModel`/`ProtonMailBackend`/`MimeParser`), `EMAIL` connection type + edit dialog + `connectEmail`, `Screen.Mail` nav, read-only MCP tools (`list_mail_folders`/`list_mail_messages`/`read_mail_message`), and `MailSessionManager` registered in `SessionManagerRegistry` (so `list_sessions`/`disconnect_profile` cover mail, transport `MAIL`). DB schema 60→61.
+
+### Verification done (2026-06-07)
+
+| Tier | Evidence |
+|---|---|
+| Unit (host) | `core/data` AuthMethodSpec `PROTON_SRP` + EMAIL defaults + Room 60→61; `feature/mail` Mime4j parse (multipart + HTML-strip) |
+| Go bridge (host, real account) | env-gated `mailbridge_live_test.go`: SRP login + keyring unlock + 14 folders + list + decrypt 6190 B |
+| Kotlin parser (host, real msg) | `MimeParser` parsed a real Proton message → subject/from/to/date/body |
+| On-device UI | created EMAIL connection, connected, Mail screen renders folders→list→reader |
+| On-device agent (MCP) | `list_mail_folders`/`list_mail_messages`/`read_mail_message` drive the live session; `list_sessions` shows `MAIL`; `disconnect_profile` tears it down |
+| Security chain — tunnel | **positive:** routed through the `upwg` WG tunnel → profile holds the tunnel + reads work; **negative:** routed through a blackhole tunnel → connect FAILS via SOCKS (`socks connect … connection refused`), **no clearnet fallback** |
+
+### Forward plan / remaining
+
+- **v1.1 — send + sign:** implement Go `send` (per-recipient key discovery; internal Proton↔Proton E2E vs PGP-to-external vs encrypt-to-outside; `CreateDraft`/`SendDraft`; attachment encryption) + a compose UI + its own negative tests. Highest-value next feature.
+- **Exercise SPA/knock** for an EMAIL profile against an SPA-guarded tunnel ingress; confirm the `[spa]`/`[knock]` receipt lands in the connection log (`verboseLog`). This closes the last unverified v1 security layer.
+- **Stage 2 — JVM engine** (Jakarta Mail + Mime4j over `TunnelResolver.socketFactory`): 2a generic IMAP/SMTP (app-passwords), 2b Gmail XOAUTH2 (+ `OAuth2Token` store, deep-link via `core/stepca`), 2c Microsoft OAuth2.
+- **Staged 2FA / mailbox-password prompt:** v1 uses a *stored* mailbox password + a *linked TOTP secret* (account under test needs neither, so the live re-prompt path is untested). Build the staged dialog when a 2FA/two-password account is available.
+- **Polish:** wire `WithUserAgent` in the Go bridge (ToS-fingerprint hygiene); fix MCP `list_connections` to report `hasStoredPassword` for EMAIL (it only checks `sshPassword`); locale translations for the new strings; consider a Proton system-label de-dup (the API returns two "All Mail" entries).
+- **Standing risk:** unofficial reverse-engineered API — ToS/account-lock risk on any tier; disclosed in the connect dialog. Keep request pacing conservative (reinforces deferring push/Stage 4).
 
 ## Architecture (mapped to existing seams)
 
