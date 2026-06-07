@@ -17,7 +17,11 @@ Goal: add an **EMAIL** connection type that, instead of a file view, opens a **K
 
 ## Implementation status (updated 2026-06-07)
 
-**v1 (ProtonMail read-only) is built and device-verified end-to-end on a real *free* Proton account.** Committed on `main`: `09ca46de` (feature), `2bd43992` (session-registry wiring), `588bef87` (settings move). Scope was sharpened from the locked decisions above with the maintainer:
+**Two read slices shipped; the hybrid two-engine architecture is now realised.** Proton (Go bridge / SOCKS) and generic IMAP (JVM / `SocketFactory`) coexist behind one `MailBackend` → one `MimeParser`, both riding the per-profile tunnel and reachable by the agent over MCP:
+- **v1 — ProtonMail read-only**, device-verified on a real *free* account. `main`: `09ca46de` (feature), `2bd43992` (registry wiring), `588bef87` (settings move).
+- **Stage 2a — generic IMAP/SMTP read**, device-verified against Dovecot-in-proot. `main`: CP-0…CP-5, ending `085d2773` (the JVM engine + the no-clearnet-leak / fail-closed-tunnel fix). Full detail in the **Stage 2a** section + Progress block below.
+
+v1 scope was sharpened from the locked decisions above with the maintainer:
 
 - **v1 = ProtonMail read-only** (connect → folders → list → read decrypted message). **Send/compose deferred to v1.1** — the Go `send` path is a deliberate 501 stub; it's the hardest/riskiest piece (per-recipient encryption) and is kept off the first release.
 - **OAuth/XOAUTH2 token store deferred to Stage 2b** (built with the Gmail JVM engine that consumes it) — no dead encrypted-credential code in a Proton-only v1.
@@ -40,12 +44,16 @@ Goal: add an **EMAIL** connection type that, instead of a file view, opens a **K
 
 ### Forward plan / remaining
 
-- **v1.1 — send + sign:** implement Go `send` (per-recipient key discovery; internal Proton↔Proton E2E vs PGP-to-external vs encrypt-to-outside; `CreateDraft`/`SendDraft`; attachment encryption) + a compose UI + its own negative tests. Highest-value next feature.
-- **Exercise SPA/knock** for an EMAIL profile against an SPA-guarded tunnel ingress; confirm the `[spa]`/`[knock]` receipt lands in the connection log (`verboseLog`). This closes the last unverified v1 security layer.
-- **Stage 2 — JVM engine** (Jakarta Mail + Mime4j over `TunnelResolver.socketFactory`): 2a generic IMAP/SMTP (app-passwords), 2b Gmail XOAUTH2 (+ `OAuth2Token` store, deep-link via `core/stepca`), 2c Microsoft OAuth2.
-- **Staged 2FA / mailbox-password prompt:** v1 uses a *stored* mailbox password + a *linked TOTP secret* (account under test needs neither, so the live re-prompt path is untested). Build the staged dialog when a 2FA/two-password account is available.
-- **Polish:** wire `WithUserAgent` in the Go bridge (ToS-fingerprint hygiene); fix MCP `list_connections` to report `hasStoredPassword` for EMAIL (it only checks `sshPassword`); locale translations for the new strings; consider a Proton system-label de-dup (the API returns two "All Mail" entries).
-- **Standing risk:** unofficial reverse-engineered API — ToS/account-lock risk on any tier; disclosed in the connect dialog. Keep request pacing conservative (reinforces deferring push/Stage 4).
+Both engines can **read**; neither can **send** yet. Priority order:
+
+- **Send — both engines (next).** The hard, highest-value piece. A **shared full-screen compose UI** (CP-7; portrait: no FAB, top-bar Compose/reply/forward) + a consent-gated `send_mail` MCP tool, over one `MailBackend.send` seam:
+  - **IMAP/SMTP send (CP-6):** `MailClient.send` → `Transport.send` over the SMTP `socketFactory` (implicit 465 / STARTTLS 587), append-to-Sent. Low crypto risk — lands first.
+  - **Proton v1.1 send:** Go `send` (per-recipient key discovery; internal Proton↔Proton E2E vs PGP-to-external vs encrypt-to-outside; `CreateDraft`/`SendDraft`; attachment encryption). Hardest/riskiest (a mis-scheme leaks plaintext); reuses the same compose seam. Proton `send` stays a **501 stub** until this lands.
+- **Stage 2b — OAuth (Gmail / Microsoft)** on the *same* JVM engine — an **auth-only delta**, not a new engine: build the `OAuth2Token` store + reuse `core/stepca`'s deep-link OAuth (`OidcAuthClient`/`Pkce`/`OidcRedirectActivity`); `emailAuthMethods` carries `XOAUTH2:<tokenId>`. (Gmail `https://mail.google.com/` is a restricted scope → CASA for a *published* build; BYO OAuth client for personal use. Microsoft has no CASA.)
+- **Exercise SPA/knock** for an EMAIL profile against an SPA-guarded tunnel ingress; confirm the `[spa]`/`[knock]` receipt lands in `verboseLog`. Still the **one unverified security layer** (tunnel routing + no-clearnet-leak are now proven for both engines).
+- **Staged 2FA / mailbox-password prompt** (Proton): v1 uses a *stored* mailbox password + a *linked TOTP secret*; the live re-prompt path is untested. Build the staged dialog when a 2FA/two-password account is available.
+- **Gaps & polish:** positive **IMAP-over-a-working-tunnel** proof (needs a remote IMAP reachable only via a live tunnel — no single-device infra for it); optional in-process **GreenMail** CI test for the IMAP envelope→`MailMessage` mapping; wire `WithUserAgent` in the Go bridge (ToS-fingerprint hygiene); fix MCP `list_connections` to report `hasStoredPassword` for EMAIL (only checks `sshPassword`); **11-locale translation** of the new Stage-2a strings; Proton system-label de-dup (the API returns two "All Mail" entries).
+- **Standing risk:** Proton's unofficial reverse-engineered API — ToS/account-lock risk on any tier; disclosed in the connect dialog. Keep request pacing conservative (reinforces deferring push/Stage 4).
 
 ## Stage 2a — Generic IMAP/SMTP (the second engine) — plan (2026-06-07)
 
@@ -97,8 +105,9 @@ SECURITY CHAIN  ── all reused, not rebuilt ──
   Message     MailCryptoService → gopenpgp (Go bridge)
         │
         ▼  ENGINE (hybrid)
-  Proton  → Go mailbridge (gomobile): go-proton-api + gluon + gopenpgp   [v1]
-  IMAP/SMTP & Gmail/Outlook → JVM Jakarta Mail + Mime4j, socketFactory   [stage 2]
+  Proton  → Go mailbridge (gomobile): go-proton-api + gopenpgp           [v1, read]
+  IMAP/SMTP → JVM android-mail (JavaMail) + Mime4j, socketFactory        [Stage 2a, read ✅]
+  Gmail/Outlook → same JVM engine + XOAUTH2 token                        [Stage 2b]
         │
         ▼  core/mail: MailSessionManager (mirror RcloneSessionManager) + MailBackend + MailTransportSelector
         ▼  feature/mail: MailScreen → folder list → message list → reader → compose   (mirror feature/sftp)
@@ -112,7 +121,7 @@ SECURITY CHAIN  ── all reused, not rebuilt ──
 | Provider | Auth | Protocol (v1) | Engine | Security-chain hook | Distribution caveat | Stage |
 |---|---|---|---|---|---|---|
 | **ProtonMail** | SRP + mailbox pw + TOTP | Proton API (`go-proton-api`) | Go bridge | SOCKS `socksEndpoint` + SPA/knock; **PGP native** | Unofficial/reverse-engineered API; fragile to Proton changes | **v1** |
-| **Generic IMAP/SMTP** (Dovecot, Fastmail, iCloud, Yahoo) | password / **app-password** | IMAP 993 + SMTP 465/587 | JVM Jakarta Mail | `socketFactory` + SPA/knock; PGP optional | None — app-passwords need no OAuth verification | **stage 2 (first)** |
+| **Generic IMAP/SMTP** (Dovecot, Fastmail, iCloud, Yahoo) | password / **app-password** | IMAP 993 + SMTP 465/587 | JVM android-mail (JavaMail) | `socketFactory` + SPA/knock; PGP optional | None — app-passwords need no OAuth verification | **✅ read done (Stage 2a)**; send = CP-6 |
 | **Gmail / Workspace** | **XOAUTH2** (token as password) | IMAP 993 + SMTP 465 | JVM Jakarta Mail | `socketFactory`; token = auth layer; PGP optional | Scope `https://mail.google.com/` is **restricted** → CASA assessment for a *published* app (Testing/personal-use exempt). Android loopback redirect deprecated → **deep-link**. BYO OAuth client per user. | stage 2 |
 | **Microsoft** (Outlook.com personal + M365 work/school) | **OAuth2** (token) | IMAP 993 + SMTP 587 | JVM Jakarta Mail | `socketFactory`; token = auth layer | Basic auth dead (SMTP 100% by 2026-04-30). Free Azure app reg (multi-tenant + personal), **no CASA**. | stage 2 |
 | **Future:** Gmail REST · MS Graph · Fastmail JMAP | OAuth2 | REST / JMAP | JVM (HTTP, via `socketFactory`/proxy) | `socketFactory` | Modern alternatives to IMAP; not needed for parity | stage 4+ |
