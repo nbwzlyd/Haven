@@ -517,6 +517,42 @@ class SshSessionManager @Inject constructor(
     }
 
     /**
+     * True when another live session shares [sessionId]'s [SshClient] — i.e.
+     * this session was opened via connection reuse (a second terminal on an
+     * already-connected profile, sharing one SSH connection across several
+     * shell channels / tmux sessions). Callers use this to avoid duplicating
+     * connection-scoped setup (port forwards) and to keep the shared client
+     * alive in [tearDown] until its last session goes away.
+     */
+    fun isClientShared(sessionId: String): Boolean {
+        val target = _sessions.value[sessionId] ?: return false
+        return _sessions.value.values.any { it.sessionId != sessionId && it.client === target.client }
+    }
+
+    /**
+     * Store a bookkeeping [ConnectionConfig] for a connection-reuse session
+     * [sessionId] — one that was registered against another session's live
+     * [SshClient] instead of dialing its own. The config carries reconnect
+     * OFF (the primary session owns reconnect of the shared client) and a
+     * fresh empty password, so [tearDown]'s auth-zeroing can never reach the
+     * primary's live credential. Host/port/username are copied from the
+     * profile's primary session purely for display/bookkeeping.
+     */
+    fun storeReuseConfig(sessionId: String, profileId: String, sessionMgr: SessionManager) {
+        val ref = _sessions.value.values
+            .firstOrNull { it.profileId == profileId && it.sessionId != sessionId && it.connectionConfig != null }
+            ?.connectionConfig
+        val config = ConnectionConfig(
+            host = ref?.host ?: "reused-connection",
+            port = ref?.port ?: 22,
+            username = ref?.username ?: "reused",
+            authMethod = ConnectionConfig.AuthMethod.Password(""),
+            reconnectPolicy = ConnectionConfig.ReconnectPolicy(autoReconnect = false),
+        )
+        storeConnectionConfig(sessionId, config, sessionMgr)
+    }
+
+    /**
      * Create an [ScpClient] bound to the connected JSch session for
      * [profileId]. Each call produces a new façade — the session itself is
      * shared, but SCP opens a fresh exec channel per operation so there is
@@ -1368,8 +1404,19 @@ class SshSessionManager @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "tearDown: shellChannel.disconnect() failed", e)
         }
-        try { session.client.disconnect() } catch (e: Exception) {
-            Log.e(TAG, "tearDown: client.disconnect() failed", e)
+        // Only drop the underlying SSH connection when no other live session
+        // still rides it. Connection reuse (a 2nd terminal on an already-
+        // connected profile) shares one SshClient across several shell
+        // channels; tearing the client down here would kill the sibling
+        // session. removeSession() has already pulled this session from the
+        // map, so this checks the *remaining* sessions.
+        val clientStillInUse = _sessions.value.values.any { it.client === session.client }
+        if (clientStillInUse) {
+            Log.d(TAG, "tearDown: keeping shared SSH client alive for ${session.sessionId}'s sibling session(s)")
+        } else {
+            try { session.client.disconnect() } catch (e: Exception) {
+                Log.e(TAG, "tearDown: client.disconnect() failed", e)
+            }
         }
         // Zero out auth material so it doesn't linger in heap
         when (val auth = session.connectionConfig?.authMethod) {

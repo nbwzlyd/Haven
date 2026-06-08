@@ -1866,46 +1866,60 @@ class TerminalViewModel @Inject constructor(
 
         viewModelScope.launch {
             _newTabLoading.value = true
-            val client = SshClient()
+            // Reuse a live SSH connection to this profile instead of dialing a
+            // second flow — a 2nd dial over a WireGuard/Tailscale tunnel can't be
+            // serviced by some peers (a FRITZ!Box drops the 2nd concurrent WG→LAN
+            // flow), and one SSH connection carrying several tmux sessions is the
+            // canonical model. Scoped to tunnel-routed profiles so direct
+            // connections keep independent-per-tab semantics.
+            val reuseClient = if (connectionRepository.getById(profileId)?.tunnelConfigId != null) {
+                sessionManager.getSshClientForProfile(profileId)
+            } else null
+            val client = reuseClient ?: SshClient()
             val sessionId = sessionManager.registerSession(profileId, label, client)
             try {
-                // Route through the profile's tunnel (WireGuard / Tailscale) or
-                // legacy SOCKS/HTTP proxy, same as the primary connect path
-                // (ConnectionsViewModel). Without this a second tab on a
-                // tunnel-routed profile dials the host directly and times out
-                // ("Session not connected") because the host is only reachable
-                // through the tunnel.
-                val proxy = connectionRepository.getById(profileId)
-                    ?.let { tunnelResolver.havenProxy(it) }
-                val hostKeyEntry = withContext(Dispatchers.IO) {
-                    client.connect(config, proxy = proxy)
-                }
-
-                // Silent TOFU: auto-accept new hosts, reject key changes
-                when (val hkResult = hostKeyVerifier.verify(hostKeyEntry)) {
-                    is HostKeyResult.Trusted -> { /* matches — continue */ }
-                    is HostKeyResult.NewHost -> {
-                        hostKeyVerifier.accept(hkResult.entry)
+                if (reuseClient != null) {
+                    Log.i(TAG, "Reusing live SSH connection to $label for a new tab (no new dial)")
+                    sessionManager.storeReuseConfig(sessionId, profileId, sshSessionMgr)
+                } else {
+                    // Route through the profile's tunnel (WireGuard / Tailscale) or
+                    // legacy SOCKS/HTTP proxy, same as the primary connect path
+                    // (ConnectionsViewModel). Without this a second tab on a
+                    // tunnel-routed profile dials the host directly and times out
+                    // ("Session not connected") because the host is only reachable
+                    // through the tunnel.
+                    val proxy = connectionRepository.getById(profileId)
+                        ?.let { tunnelResolver.havenProxy(it) }
+                    val hostKeyEntry = withContext(Dispatchers.IO) {
+                        client.connect(config, proxy = proxy)
                     }
-                    is HostKeyResult.KeyChanged -> {
-                        client.disconnect()
-                        sessionManager.removeSession(sessionId)
-                        Log.w(TAG, "Host key changed for ${config.host}:${config.port} — aborting new tab")
-                        _newTabMessage.value = appContext.getString(
-                            R.string.terminal_new_tab_host_key_changed,
-                            "${config.host}:${config.port}",
-                        )
-                        _newTabLoading.value = false
-                        return@launch
-                    }
-                }
 
-                sessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr)
-                // Re-resolve the profile's tunnel / proxy on auto-reconnect, the
-                // same way the initial connect did — otherwise a tunnel-routed
-                // tab reconnects directly and stalls when off-LAN.
-                sessionManager.setReconnectProxyProvider(sessionId) {
-                    connectionRepository.getById(profileId)?.let { tunnelResolver.havenProxy(it) }
+                    // Silent TOFU: auto-accept new hosts, reject key changes
+                    when (val hkResult = hostKeyVerifier.verify(hostKeyEntry)) {
+                        is HostKeyResult.Trusted -> { /* matches — continue */ }
+                        is HostKeyResult.NewHost -> {
+                            hostKeyVerifier.accept(hkResult.entry)
+                        }
+                        is HostKeyResult.KeyChanged -> {
+                            client.disconnect()
+                            sessionManager.removeSession(sessionId)
+                            Log.w(TAG, "Host key changed for ${config.host}:${config.port} — aborting new tab")
+                            _newTabMessage.value = appContext.getString(
+                                R.string.terminal_new_tab_host_key_changed,
+                                "${config.host}:${config.port}",
+                            )
+                            _newTabLoading.value = false
+                            return@launch
+                        }
+                    }
+
+                    sessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr)
+                    // Re-resolve the profile's tunnel / proxy on auto-reconnect, the
+                    // same way the initial connect did — otherwise a tunnel-routed
+                    // tab reconnects directly and stalls when off-LAN.
+                    sessionManager.setReconnectProxyProvider(sessionId) {
+                        connectionRepository.getById(profileId)?.let { tunnelResolver.havenProxy(it) }
+                    }
                 }
 
                 val listCmd = sshSessionMgr.listCommand
@@ -2004,31 +2018,43 @@ class TerminalViewModel @Inject constructor(
 
         viewModelScope.launch {
             _newTabLoading.value = true
-            val client = SshClient()
+            // Reuse a live SSH connection to this profile instead of dialing a
+            // second flow (a 2nd dial over a WireGuard tunnel can't be serviced
+            // by some peers; one SSH connection carries multiple tmux sessions).
+            // Scoped to tunnel-routed profiles.
+            val reuseClient = if (connectionRepository.getById(profileId)?.tunnelConfigId != null) {
+                sessionManager.getSshClientForProfile(profileId)
+            } else null
+            val client = reuseClient ?: SshClient()
             val sessionId = sessionManager.registerSession(profileId, label, client)
             try {
-                // Route through the profile's tunnel / proxy (see addSshTabForProfile).
-                val proxy = connectionRepository.getById(profileId)
-                    ?.let { tunnelResolver.havenProxy(it) }
-                val hostKeyEntry = withContext(Dispatchers.IO) { client.connect(config, proxy = proxy) }
-                when (val hkResult = hostKeyVerifier.verify(hostKeyEntry)) {
-                    is HostKeyResult.Trusted -> {}
-                    is HostKeyResult.NewHost -> hostKeyVerifier.accept(hkResult.entry)
-                    is HostKeyResult.KeyChanged -> {
-                        client.disconnect()
-                        sessionManager.removeSession(sessionId)
-                        _newTabMessage.value = appContext.getString(
-                            R.string.terminal_new_tab_host_key_changed,
-                            "${config.host}:${config.port}",
-                        )
-                        _newTabLoading.value = false
-                        return@launch
+                if (reuseClient != null) {
+                    Log.i(TAG, "Reusing live SSH connection to $label to attach session '$sessionName' (no new dial)")
+                    sessionManager.storeReuseConfig(sessionId, profileId, sshSessionMgr)
+                } else {
+                    // Route through the profile's tunnel / proxy (see addSshTabForProfile).
+                    val proxy = connectionRepository.getById(profileId)
+                        ?.let { tunnelResolver.havenProxy(it) }
+                    val hostKeyEntry = withContext(Dispatchers.IO) { client.connect(config, proxy = proxy) }
+                    when (val hkResult = hostKeyVerifier.verify(hostKeyEntry)) {
+                        is HostKeyResult.Trusted -> {}
+                        is HostKeyResult.NewHost -> hostKeyVerifier.accept(hkResult.entry)
+                        is HostKeyResult.KeyChanged -> {
+                            client.disconnect()
+                            sessionManager.removeSession(sessionId)
+                            _newTabMessage.value = appContext.getString(
+                                R.string.terminal_new_tab_host_key_changed,
+                                "${config.host}:${config.port}",
+                            )
+                            _newTabLoading.value = false
+                            return@launch
+                        }
                     }
-                }
-                sessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr)
-                // Re-resolve the profile's tunnel / proxy on auto-reconnect.
-                sessionManager.setReconnectProxyProvider(sessionId) {
-                    connectionRepository.getById(profileId)?.let { tunnelResolver.havenProxy(it) }
+                    sessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr)
+                    // Re-resolve the profile's tunnel / proxy on auto-reconnect.
+                    sessionManager.setReconnectProxyProvider(sessionId) {
+                        connectionRepository.getById(profileId)?.let { tunnelResolver.havenProxy(it) }
+                    }
                 }
                 sessionManager.setChosenSessionName(sessionId, sessionName)
                 finishNewSshTab(sessionId)

@@ -696,6 +696,55 @@ class SshSessionManagerTest {
         critical = true,
     )
 
+    // ---- connection reuse (a 2nd session sharing one live SshClient) ----
+
+    @Test
+    fun `isClientShared is false for a lone session and true when a client is shared`() {
+        val shared = mockk<SshClient>(relaxed = true)
+        val s1 = manager.registerSession("p1", "primary", shared)
+        assertFalse(manager.isClientShared(s1))
+
+        // Second session reusing the SAME live client (connection reuse).
+        val s2 = manager.registerSession("p1", "reused", shared)
+        assertTrue(manager.isClientShared(s1))
+        assertTrue(manager.isClientShared(s2))
+
+        // A session on its own client is not shared.
+        val s3 = manager.registerSession("p2", "other", mockk(relaxed = true))
+        assertFalse(manager.isClientShared(s3))
+    }
+
+    @Test
+    fun `storeReuseConfig disables auto-reconnect and copies host from the primary session`() {
+        val shared = mockk<SshClient>(relaxed = true)
+        val primary = manager.registerSession("p1", "primary", shared)
+        manager.storeConnectionConfig(primary, configWithPolicy(autoReconnect = true), SessionManager.TMUX)
+
+        val reused = manager.registerSession("p1", "reused", shared)
+        manager.storeReuseConfig(reused, "p1", SessionManager.TMUX)
+
+        val cfg = manager.getSession(reused)!!.connectionConfig!!
+        assertFalse("a reuse session must not auto-reconnect (the primary owns reconnect)", cfg.reconnectPolicy.autoReconnect)
+        assertEquals("test.example", cfg.host)
+    }
+
+    @Test
+    fun `tearDown keeps a shared client alive until its last session is removed`() {
+        val shared = mockk<SshClient>(relaxed = true)
+        val s1 = manager.registerSession("p1", "primary", shared)
+        val s2 = manager.registerSession("p1", "reused", shared)
+
+        // Removing the first of two sharers must NOT disconnect the shared client.
+        manager.removeSession(s1)
+        Thread.sleep(200)
+        verify(exactly = 0) { shared.disconnect() }
+
+        // Removing the last sharer tears the underlying connection down.
+        manager.removeSession(s2)
+        Thread.sleep(200)
+        verify(exactly = 1) { shared.disconnect() }
+    }
+
     private fun configWithPolicy(
         autoReconnect: Boolean = true,
         maxAttempts: Int = 5,

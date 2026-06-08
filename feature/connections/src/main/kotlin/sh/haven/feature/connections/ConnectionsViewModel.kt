@@ -2158,7 +2158,16 @@ class ConnectionsViewModel @Inject constructor(
 
             val verboseEnabled = preferencesRepository.verboseLoggingEnabled.first()
             val verboseLogger = if (verboseEnabled) SshVerboseLogger() else null
-            val client = SshClient().apply {
+            // Reuse a live SSH connection to this profile instead of dialing a
+            // second flow. A 2nd dial over a WireGuard/Tailscale tunnel can't be
+            // serviced by some peers (a FRITZ!Box drops the 2nd concurrent
+            // WG→LAN flow), and one SSH connection carrying several tmux/zellij
+            // sessions is the canonical model anyway. Scoped to tunnel-routed
+            // profiles so direct connections keep independent-per-tab semantics.
+            val reuseClient = if (profile.tunnelConfigId != null) {
+                sshSessionManager.getSshClientForProfile(profile.id)
+            } else null
+            val client = reuseClient ?: SshClient().apply {
                 fidoAuthenticator = this@ConnectionsViewModel.fidoAuthenticator
                 this.verboseLogger = verboseLogger
             }
@@ -2168,8 +2177,9 @@ class ConnectionsViewModel @Inject constructor(
             var autoCreatedJumpSessionId: String? = null
             var isFidoAuth = false
             try {
-                // If profile has a jump host, establish that connection first
-                val jumpProfileId = profile.jumpProfileId
+                // If profile has a jump host, establish that connection first.
+                // Skipped when reusing — the live client already rode its jump.
+                val jumpProfileId = if (reuseClient == null) profile.jumpProfileId else null
                 val jumpSessionId = if (jumpProfileId != null) {
                     val (jid, reused) = connectJumpHost(jumpProfileId, password)
                     if (!reused) autoCreatedJumpSessionId = jid
@@ -2181,58 +2191,77 @@ class ConnectionsViewModel @Inject constructor(
                 }
 
                 val sshSessionMgr = withContext(Dispatchers.IO) {
-                    val authMethod = resolveAuthMethods(profile, password)
-                    isFidoAuth = authMethod is ConnectionConfig.AuthMethod.FidoKey
-                    val config = ConnectionConfig(
-                        host = profile.host,
-                        port = profile.port,
-                        username = effectiveUsername,
-                        authMethod = authMethod,
-                        sshOptions = ConnectionConfig.parseSshOptions(profile.sshOptions),
-                        forwardAgent = profile.forwardAgent,
-                        addressFamily = profile.addressFamilyForSsh,
-                        agentIdentities = agentIdentitiesFor(profile),
-                        reconnectPolicy = profile.reconnectPolicy,
-                    )
-
-                    // Proxy precedence: jump host > Route-through (tunnel /
-                    // SOCKS / HTTP). Jump host needs a live SSH session so it
-                    // stays inline; everything else delegates to TunnelResolver.
-                    val proxy = if (jumpSessionId != null) {
-                        sshSessionManager.createProxyJump(jumpSessionId)
-                            ?: throw Exception("Jump host session not usable for tunneling")
-                    } else {
-                        tunnelResolver.havenProxy(profile)
-                    }
-                    Log.d(TAG, "Connecting to ${config.host}:${config.port} (proxy=${proxy != null})")
-                    try {
-                        val hostKeyEntry = client.connect(
-                            config,
-                            proxy = proxy,
-                            keyboardInteractivePrompter = keyboardInteractivePrompter,
-                            totpCodeProvider = buildTotpCodeProvider(profile),
-                            confirmOtp = profile.totpConfirmBeforeSend,
-                            preConnect = buildKnockHook(profile, verboseLogger),
-                        )
-                        runTofuVerification(hostKeyEntry, clientToDisconnectOnReject = client)
-                    } catch (e: HostKeyAuthFailure) {
-                        // KEX succeeded but auth failed — still run the TOFU
-                        // prompt on first contact (Haven#75 follow-up) then
-                        // rethrow the underlying JSch auth error so the catch
-                        // block below can trigger the password-fallback UX.
-                        runTofuVerification(e.hostKey, clientToDisconnectOnReject = null)
-                        throw e.cause ?: e
-                    }
-
                     val sshSessionMgr = resolveSessionManager(profile)
                     val cmdOverride = preferencesRepository.sessionCommandOverride.first()
-                    sshSessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr, cmdOverride, profile.postLoginCommand, profile.postLoginBeforeSessionManager)
-                    // Re-resolve the profile's tunnel/proxy on auto-reconnect.
-                    // Jump-host sessions reconnect via createProxyJump instead,
-                    // so only register for the non-jump (havenProxy) case.
-                    if (jumpSessionId == null) {
-                        sshSessionManager.setReconnectProxyProvider(sessionId) {
+                    if (reuseClient != null) {
+                        // Reuse path: the SSH connection is already up, so no
+                        // dial, auth, host-key check or reconnect provider — the
+                        // primary session owns all of those. Store a bookkeeping
+                        // config with reconnect OFF (the primary's reconnect
+                        // re-establishes the shared client) and a fresh empty
+                        // Password so tearDown's auth-zeroing can never reach
+                        // back into the primary's live credential.
+                        Log.i(TAG, "Reusing live SSH connection to ${profile.label} for a second session (no new dial)")
+                        val config = ConnectionConfig(
+                            host = profile.host,
+                            port = profile.port,
+                            username = effectiveUsername,
+                            authMethod = ConnectionConfig.AuthMethod.Password(""),
+                            reconnectPolicy = ConnectionConfig.ReconnectPolicy(autoReconnect = false),
+                        )
+                        sshSessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr, cmdOverride, profile.postLoginCommand, profile.postLoginBeforeSessionManager)
+                    } else {
+                        val authMethod = resolveAuthMethods(profile, password)
+                        isFidoAuth = authMethod is ConnectionConfig.AuthMethod.FidoKey
+                        val config = ConnectionConfig(
+                            host = profile.host,
+                            port = profile.port,
+                            username = effectiveUsername,
+                            authMethod = authMethod,
+                            sshOptions = ConnectionConfig.parseSshOptions(profile.sshOptions),
+                            forwardAgent = profile.forwardAgent,
+                            addressFamily = profile.addressFamilyForSsh,
+                            agentIdentities = agentIdentitiesFor(profile),
+                            reconnectPolicy = profile.reconnectPolicy,
+                        )
+
+                        // Proxy precedence: jump host > Route-through (tunnel /
+                        // SOCKS / HTTP). Jump host needs a live SSH session so it
+                        // stays inline; everything else delegates to TunnelResolver.
+                        val proxy = if (jumpSessionId != null) {
+                            sshSessionManager.createProxyJump(jumpSessionId)
+                                ?: throw Exception("Jump host session not usable for tunneling")
+                        } else {
                             tunnelResolver.havenProxy(profile)
+                        }
+                        Log.d(TAG, "Connecting to ${config.host}:${config.port} (proxy=${proxy != null})")
+                        try {
+                            val hostKeyEntry = client.connect(
+                                config,
+                                proxy = proxy,
+                                keyboardInteractivePrompter = keyboardInteractivePrompter,
+                                totpCodeProvider = buildTotpCodeProvider(profile),
+                                confirmOtp = profile.totpConfirmBeforeSend,
+                                preConnect = buildKnockHook(profile, verboseLogger),
+                            )
+                            runTofuVerification(hostKeyEntry, clientToDisconnectOnReject = client)
+                        } catch (e: HostKeyAuthFailure) {
+                            // KEX succeeded but auth failed — still run the TOFU
+                            // prompt on first contact (Haven#75 follow-up) then
+                            // rethrow the underlying JSch auth error so the catch
+                            // block below can trigger the password-fallback UX.
+                            runTofuVerification(e.hostKey, clientToDisconnectOnReject = null)
+                            throw e.cause ?: e
+                        }
+
+                        sshSessionManager.storeConnectionConfig(sessionId, config, sshSessionMgr, cmdOverride, profile.postLoginCommand, profile.postLoginBeforeSessionManager)
+                        // Re-resolve the profile's tunnel/proxy on auto-reconnect.
+                        // Jump-host sessions reconnect via createProxyJump instead,
+                        // so only register for the non-jump (havenProxy) case.
+                        if (jumpSessionId == null) {
+                            sshSessionManager.setReconnectProxyProvider(sessionId) {
+                                tunnelResolver.havenProxy(profile)
+                            }
                         }
                     }
                     sshSessionMgr
@@ -3146,19 +3175,24 @@ class ConnectionsViewModel @Inject constructor(
         }
 
         // Apply enabled port forward rules (best-effort; not gated on shell health).
-        withContext(Dispatchers.IO) {
-            val mcpEndpointId = preferencesRepository.mcpTunnelEndpointProfileId.first()
-            val rules = portForwardRepository.getEnabledForProfile(profileId)
-                // One :8730 owner per host: when this profile is the designated
-                // always-on (headless) MCP endpoint, the dedicated McpTunnelManager
-                // tunnel owns the -R 8730 — skip the per-connection rule so the two
-                // don't collide on the remote sshd bind.
-                .filterNot { mcpEndpointId == profileId && it.isMcpReverseTunnel() }
-            if (rules.isNotEmpty()) {
-                sshSessionManager.applyPortForwards(
-                    sessionId,
-                    rules.map { it.toForwardInfo() },
-                )
+        // Skipped for connection-reuse sessions — the primary session already
+        // holds these forwards on the shared SSH client, so re-binding them here
+        // only produces "port already registered" failures.
+        if (!sshSessionManager.isClientShared(sessionId)) {
+            withContext(Dispatchers.IO) {
+                val mcpEndpointId = preferencesRepository.mcpTunnelEndpointProfileId.first()
+                val rules = portForwardRepository.getEnabledForProfile(profileId)
+                    // One :8730 owner per host: when this profile is the designated
+                    // always-on (headless) MCP endpoint, the dedicated McpTunnelManager
+                    // tunnel owns the -R 8730 — skip the per-connection rule so the two
+                    // don't collide on the remote sshd bind.
+                    .filterNot { mcpEndpointId == profileId && it.isMcpReverseTunnel() }
+                if (rules.isNotEmpty()) {
+                    sshSessionManager.applyPortForwards(
+                        sessionId,
+                        rules.map { it.toForwardInfo() },
+                    )
+                }
             }
         }
         sshSessionManager.updateStatus(sessionId, SshSessionManager.SessionState.Status.CONNECTED)
