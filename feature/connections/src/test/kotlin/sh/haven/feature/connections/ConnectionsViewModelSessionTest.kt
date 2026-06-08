@@ -25,6 +25,7 @@ import sh.haven.core.fido.FidoAuthenticator
 import sh.haven.core.local.DesktopManager
 import sh.haven.core.local.LocalSessionManager
 import sh.haven.core.local.ProotManager
+import sh.haven.core.mail.MailSessionManager
 import sh.haven.core.mosh.MoshSessionManager
 import sh.haven.core.reticulum.ReticulumTransport
 import sh.haven.core.reticulum.ReticulumSessionManager
@@ -53,6 +54,7 @@ class ConnectionsViewModelSessionTest {
     private lateinit var smbSessionManager: SmbSessionManager
     private lateinit var localSessionManager: LocalSessionManager
     private lateinit var rdpSessionManager: RdpSessionManager
+    private lateinit var mailSessionManager: MailSessionManager
     private lateinit var prootManager: ProotManager
     private lateinit var desktopManager: DesktopManager
     private lateinit var sessionManagerRegistry: SessionManagerRegistry
@@ -100,6 +102,9 @@ class ConnectionsViewModelSessionTest {
             every { sessions } returns MutableStateFlow(emptyMap())
             every { activeSessions } returns emptyList()
         }
+        mailSessionManager = mockk(relaxed = true) {
+            every { sessions } returns MutableStateFlow(emptyMap())
+        }
         sessionManagerRegistry = SessionManagerRegistry(
             ssh = sshSessionManager,
             reticulum = reticulumSessionManager,
@@ -108,6 +113,7 @@ class ConnectionsViewModelSessionTest {
             smb = smbSessionManager,
             local = localSessionManager,
             rdp = rdpSessionManager,
+            mail = mailSessionManager,
             keepAlives = emptySet(),
         )
 
@@ -129,6 +135,7 @@ class ConnectionsViewModelSessionTest {
             rcloneClient = mockk(relaxed = true),
             fidoAuthenticator = mockk(relaxed = true),
             localSessionManager = localSessionManager,
+            mailSessionManager = mailSessionManager,
             sessionManagerRegistry = sessionManagerRegistry,
             sshKeyRepository = mockk(relaxed = true) {
                 every { observeAll() } returns flowOf(emptyList())
