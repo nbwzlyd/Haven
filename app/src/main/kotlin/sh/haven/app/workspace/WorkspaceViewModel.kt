@@ -67,15 +67,20 @@ class WorkspaceViewModel @Inject constructor(
 
     fun acknowledge() = launcher.acknowledge()
 
+    // Repo CRUD runs on the default viewModelScope dispatcher: the only
+    // blocking work is the Room suspend DAOs, which already hop to Room's
+    // own executor off the calling thread. Pinning these to Dispatchers.IO
+    // offloaded nothing and made them untestable (a real thread pool the
+    // test scheduler can't advance — see WorkspaceViewModelTest flakiness).
     fun delete(workspaceId: String) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             workspaceRepository.delete(workspaceId)
         }
     }
 
     fun rename(workspaceId: String, newName: String) {
         if (newName.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             val existing = workspaceRepository.getWorkspace(workspaceId) ?: return@launch
             workspaceRepository.save(
                 profile = existing.profile.copy(name = newName.trim()),
@@ -97,7 +102,7 @@ class WorkspaceViewModel @Inject constructor(
     ) {
         if (name.isBlank()) return
         if (items.isEmpty()) return
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             val profile = if (existingId != null) {
                 workspaceRepository.getWorkspace(existingId)?.profile?.copy(name = name.trim())
                     ?: WorkspaceProfile(id = existingId, name = name.trim())
