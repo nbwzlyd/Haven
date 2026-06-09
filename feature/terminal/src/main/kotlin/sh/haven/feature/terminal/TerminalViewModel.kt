@@ -936,7 +936,6 @@ class TerminalViewModel @Inject constructor(
         val currentTabs = _tabs.value.toMutableList()
 
         // Remove tabs for disconnected sessions
-        val hadTabs = currentTabs.isNotEmpty()
         val removed = currentTabs.removeAll { tab ->
             when (tab.transportType) {
                 "SSH" -> tab.sessionId !in activeSshIds ||
@@ -954,9 +953,6 @@ class TerminalViewModel @Inject constructor(
         }
         if (removed) {
             trackedSessionIds.retainAll(currentTabs.map { it.sessionId }.toSet())
-            if (hadTabs && currentTabs.isEmpty()) {
-                _navigateToConnections.value = true
-            }
         }
 
         // Create tabs for new SSH sessions (or reattach to existing ones after Activity recreation)
@@ -1693,7 +1689,19 @@ class TerminalViewModel @Inject constructor(
         trackedSessionIds.remove(sessionId)
         // Removal is synchronous; the tab reconciliation (now suspending, since
         // it resolves profiles off-main) runs in a launched coroutine. (#208 #14)
-        viewModelScope.launch { syncSessions() }
+        viewModelScope.launch {
+            syncSessions()
+            // Returning to Connections fires HERE — on an EXPLICIT user tab
+            // close that empties the list — not inside syncSessions(). A
+            // session dying on its own (e.g. a flaky-WireGuard drop right after
+            // connect) also runs syncSessions and removes its tab, but must NOT
+            // bounce the user off the Terminal they just connected to. That
+            // reconciliation-driven bounce was the connect→Terminal→Connections
+            // flicker.
+            if (_tabs.value.isEmpty()) {
+                _navigateToConnections.value = true
+            }
+        }
     }
 
     private fun removeAllForProfileAndSync(profileId: String) {
@@ -1705,7 +1713,14 @@ class TerminalViewModel @Inject constructor(
         trackedSessionIds.removeAll(
             _tabs.value.filter { it.profileId == profileId }.map { it.sessionId }.toSet()
         )
-        viewModelScope.launch { syncSessions() }
+        viewModelScope.launch {
+            syncSessions()
+            // Explicit close (Connections-screen disconnect) → return to
+            // Connections only if it emptied the tab list. See removeTabAndSync.
+            if (_tabs.value.isEmpty()) {
+                _navigateToConnections.value = true
+            }
+        }
     }
 
     /**
