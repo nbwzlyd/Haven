@@ -138,6 +138,12 @@ fun MailScreen(
     // decoded bytes straight to the user-picked Uri (scoped-storage-safe).
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // Hoist the snackbar strings out of the callback: reading resource values off
+    // LocalContext.current inside a lambda trips the LocalContextGetResourceValueCall
+    // lint (it won't recompose on a locale change). The saved message keeps its
+    // %1$s filename placeholder, filled in at callback time.
+    val attachmentSavedTemplate = stringResource(R.string.mail_attachment_saved)
+    val attachmentSaveFailedMsg = stringResource(R.string.mail_attachment_save_failed)
     var pendingSave by remember { mutableStateOf<MailAttachmentInfo?>(null) }
     val saveAttachmentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("*/*"),
@@ -154,8 +160,8 @@ fun MailScreen(
                     }.isSuccess
                 }
                 snackbarHostState.showSnackbar(
-                    if (ok) context.getString(R.string.mail_attachment_saved, att.filename)
-                    else context.getString(R.string.mail_attachment_save_failed),
+                    if (ok) attachmentSavedTemplate.format(att.filename)
+                    else attachmentSaveFailedMsg,
                 )
             }
         }
