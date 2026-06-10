@@ -195,6 +195,57 @@ class ImapMailClient @Inject constructor() : MailClient {
         }
     }
 
+    override suspend fun folderUidState(sessionId: String, folderId: String): MailFolderUidState =
+        withContext(Dispatchers.IO) {
+            val s = session(sessionId)
+            val folder = s.store.getFolder(folderId)
+            folder.open(Folder.READ_ONLY)
+            try {
+                val uf = folder as UIDFolder
+                val count = folder.messageCount
+                val maxUid = if (count > 0) uf.getUID(folder.getMessage(count)) else 0L
+                val uidNext = (folder as? com.sun.mail.imap.IMAPFolder)?.uidNext?.takeIf { it > 0 }
+                MailFolderUidState(uidValidity = uf.uidValidity, uidNext = uidNext, maxUid = maxUid)
+            } catch (e: MessagingException) {
+                throw MailException.ProtocolError(0, e.message ?: "IMAP UID-state read failed")
+            } finally {
+                runCatching { folder.close(false) }
+            }
+        }
+
+    override suspend fun listSince(
+        sessionId: String,
+        folderId: String,
+        sinceUid: Long,
+        max: Int,
+    ): List<MailNewMessage> = withContext(Dispatchers.IO) {
+        val s = session(sessionId)
+        val folder = s.store.getFolder(folderId)
+        folder.open(Folder.READ_ONLY)
+        try {
+            val uf = folder as UIDFolder
+            // Inclusive range; getMessagesByUID can return the boundary message, so filter > sinceUid.
+            val msgs = uf.getMessagesByUID(sinceUid + 1, UIDFolder.LASTUID)
+            if (msgs.isEmpty()) return@withContext emptyList()
+            folder.fetch(
+                msgs,
+                FetchProfile().apply {
+                    add(FetchProfile.Item.ENVELOPE)
+                    add(FetchProfile.Item.FLAGS)
+                    add(UIDFolder.FetchProfileItem.UID)
+                },
+            )
+            msgs.mapNotNull { m ->
+                val uid = uf.getUID(m)
+                if (uid <= sinceUid) null else MailNewMessage(toMailMessage(m, uf, folderId), uid)
+            }.sortedBy { it.uid }.take(max)
+        } catch (e: MessagingException) {
+            throw MailException.ProtocolError(0, e.message ?: "IMAP poll failed")
+        } finally {
+            runCatching { folder.close(false) }
+        }
+    }
+
     /**
      * Open the message's folder READ_WRITE, resolve it by UID, run [block], and close
      * (expunging when [expungeOnClose]). Shared by the flag/delete filter ops.

@@ -33,6 +33,7 @@ class HavenApp : Application(), Configuration.Provider {
     @Inject lateinit var prootManager: sh.haven.core.local.ProotManager
     @Inject lateinit var guestServiceManager: sh.haven.core.local.GuestServiceManager
     @Inject lateinit var sessionManagerRegistry: sh.haven.core.ssh.SessionManagerRegistry
+    @Inject lateinit var mailWatchManager: sh.haven.app.agent.mailrules.MailWatchManager
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -201,6 +202,10 @@ class HavenApp : Application(), Configuration.Provider {
         // Idempotent (KEEP policy); cheap when the user has no CAs
         // configured — the worker enumerates SshKeys and exits early.
         CertRenewalWorker.schedule(this)
+
+        // Start the Mail-Rules watch. It observes the master switch and does nothing
+        // until the user enables inbound-email automation (off by default).
+        mailWatchManager.start()
     }
 
     /**

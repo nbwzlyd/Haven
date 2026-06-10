@@ -78,6 +78,13 @@ class BiometricGate @Inject constructor() {
     }
 
     /**
+     * Whether a Haven activity is currently foreground. Read by the Mail-Rules executor to
+     * decide a destructive action's posture — the same signal the consent gate fails closed
+     * on, so "the rule may run a destructive action now" matches "a consent prompt could render".
+     */
+    fun isForegroundActive(): Boolean = foregroundActive
+
+    /**
      * Suspend until the user resolves the prompt for the queued
      * request, or [timeoutMs] elapses. Returns [Decision.UNAVAILABLE]
      * if no Activity is foregrounded; [Decision.DENY] on timeout or

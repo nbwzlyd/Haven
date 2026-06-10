@@ -81,6 +81,23 @@ data class MailMessage(
 )
 
 /**
+ * A folder's IMAP UID state, read at the start of a Mail-Rules poll. [maxUid] is the
+ * highest existing UID (0 when empty); [uidValidity] guards against the server
+ * renumbering the mailbox; [uidNext] is the advertised next-UID (diagnostic).
+ */
+data class MailFolderUidState(
+    val uidValidity: Long,
+    val uidNext: Long?,
+    val maxUid: Long,
+)
+
+/** A message returned by the new-mail poll: its envelope plus its IMAP [uid]. */
+data class MailNewMessage(
+    val message: MailMessage,
+    val uid: Long,
+)
+
+/**
  * An outgoing message handed to [MailClient.send]. Carries a plain-text body and
  * optional [attachments]; HTML bodies and reply-threading headers (In-Reply-To /
  * References) are still deferred. [to] must be non-empty; the From address is the

@@ -344,6 +344,22 @@ class McpServer @Inject constructor(
     )
 
     /**
+     * Invoke an MCP tool by name, BYPASSING the interactive consent gate. For the
+     * Mail-Rules engine only: an enabled rule is the user's standing pre-authorization,
+     * and the engine fires while backgrounded (where [tools] consent would fail closed).
+     * The tool's own audit still records the call. Throws [McpError] on bad input.
+     */
+    suspend fun callToolUnconsented(name: String, arguments: org.json.JSONObject): org.json.JSONObject =
+        tools.call(name, arguments, clientHint = "mail-rule")
+
+    /**
+     * The [ConsentLevel] of tool [name] (null if unknown). The Mail-Rules executor derives
+     * a rule action's background-safety posture from this: NEVER → runs in background;
+     * non-NEVER → treated as destructive (notify-only / queued until foreground).
+     */
+    fun toolConsentLevel(name: String): ConsentLevel? = tools.consentFor(name)?.level
+
+    /**
      * Start the server on the first free port in [8730..8739] (a small
      * deterministic range so a reconnecting MCP client can find us
      * again after an app restart). Falls back to an OS-assigned port

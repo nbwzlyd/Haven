@@ -67,6 +67,19 @@ object MimeParser {
     fun listAttachments(rfc822: ByteArray): List<MailAttachmentInfo> = parse(rfc822).attachments
 
     /**
+     * All top-level header fields as a lowercase-name → values map, for Mail-Rules
+     * `header` criteria. Multi-valued headers (e.g. Received) keep every occurrence.
+     */
+    fun parseHeaders(rfc822: ByteArray): Map<String, List<String>> {
+        val message = buildMessage(rfc822)
+        val map = LinkedHashMap<String, MutableList<String>>()
+        message.header?.fields?.forEach { f ->
+            map.getOrPut(f.name.lowercase()) { mutableListOf() }.add(f.body ?: "")
+        }
+        return map
+    }
+
+    /**
      * Decode and return one attachment by its stable depth-first [index] (from
      * [parse]/[listAttachments]). Decodes the part's transfer-encoding
      * (base64/quoted-printable) and returns the raw file bytes.

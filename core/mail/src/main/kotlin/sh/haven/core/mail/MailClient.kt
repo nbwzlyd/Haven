@@ -74,6 +74,24 @@ interface MailClient {
      */
     suspend fun deleteMessage(sessionId: String, messageId: String)
 
+    /**
+     * Read [folderId]'s IMAP UID state for the Mail-Rules poller (UIDVALIDITY, UIDNEXT,
+     * highest existing UID). Proton: throws [MailException.ProtocolError] (501).
+     */
+    suspend fun folderUidState(sessionId: String, folderId: String): MailFolderUidState
+
+    /**
+     * Fetch envelopes for messages whose UID is strictly greater than [sinceUid] in
+     * [folderId], oldest-first, capped at [max]. Each carries its UID so the poller can
+     * advance its high-water-mark. Proton: 501.
+     */
+    suspend fun listSince(
+        sessionId: String,
+        folderId: String,
+        sinceUid: Long,
+        max: Int,
+    ): List<MailNewMessage>
+
     /** Revoke and drop the session. */
     suspend fun logout(sessionId: String)
 

@@ -105,6 +105,17 @@ class ProtonMailClient @Inject constructor() : MailClient {
     override suspend fun deleteMessage(sessionId: String, messageId: String): Unit =
         throw MailException.ProtocolError(501, "Proton delete is not implemented yet")
 
+    override suspend fun folderUidState(sessionId: String, folderId: String): MailFolderUidState =
+        throw MailException.ProtocolError(501, "Proton mail-rules polling is not implemented yet")
+
+    override suspend fun listSince(
+        sessionId: String,
+        folderId: String,
+        sinceUid: Long,
+        max: Int,
+    ): List<MailNewMessage> =
+        throw MailException.ProtocolError(501, "Proton mail-rules polling is not implemented yet")
+
     override suspend fun logout(sessionId: String) {
         withContext(Dispatchers.IO) { MailBridge.logout(sessionId) }
     }
