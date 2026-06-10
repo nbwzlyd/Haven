@@ -4922,6 +4922,9 @@ internal class McpTools(
         // Master opt-in for exposing USB devices to the proot guest (gates
         // usb_attach_to_guest). MCP-drivable so integration tests can flip it.
         "usb_guest_exposure_enabled",
+        // Master switch for inbound-email automation (Mail Rules). MCP-drivable so
+        // the engine can be armed without the Settings UI.
+        "mail_automation_enabled",
     )
 
     private suspend fun getPreference(args: JSONObject): JSONObject {
@@ -4946,6 +4949,7 @@ internal class McpTools(
             "mcp_lan_bind_enabled" -> preferencesRepository.mcpLanBindEnabled.first()
             "mcp_wireguard_tunnel_config_id" -> preferencesRepository.mcpWireguardTunnelConfigId.first() ?: ""
             "usb_guest_exposure_enabled" -> preferencesRepository.usbGuestExposureEnabled.first()
+            "mail_automation_enabled" -> preferencesRepository.mailAutomationEnabled.first()
             else -> throw McpError(-32602, "Preference $key is not in the whitelist")
         }
         return JSONObject().apply {
@@ -5011,6 +5015,7 @@ internal class McpTools(
             "mcp_wireguard_tunnel_config_id" ->
                 preferencesRepository.setMcpWireguardTunnelConfigId((rawValue as? String)?.ifBlank { null })
             "usb_guest_exposure_enabled" -> preferencesRepository.setUsbGuestExposureEnabled(coerceBool())
+            "mail_automation_enabled" -> preferencesRepository.setMailAutomationEnabled(coerceBool())
         }
         return JSONObject().apply {
             put("key", key)

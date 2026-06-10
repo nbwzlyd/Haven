@@ -27,10 +27,14 @@ import javax.inject.Singleton
  */
 @Singleton
 class MailRuleActionExecutor @Inject constructor(
-    private val mcpServer: McpServer,
+    // Lazy breaks the Dagger cycle McpServer → MailWatchManager → executor → McpServer:
+    // the executor only needs McpServer at fire time, long after construction.
+    private val mcpServerLazy: dagger.Lazy<McpServer>,
     private val mailSessionManager: MailSessionManager,
     private val repo: MailRuleRepository,
 ) : MailRuleActionRunner {
+
+    private val mcpServer: McpServer get() = mcpServerLazy.get()
 
     override suspend fun run(action: MailRuleAction, ctx: ActionContext, foreground: Boolean): ActionOutcome {
         if (isDestructive(action) && !foreground) {
