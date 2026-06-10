@@ -362,6 +362,7 @@ fun ConnectionEditDialog(
         mutableStateOf(existing?.reconnectOnNetworkChange ?: true)
     }
     var tunnelOnly by rememberSaveable { mutableStateOf(existing?.tunnelOnly ?: false) }
+    var mcpEnabled by rememberSaveable { mutableStateOf(existing?.mcpEnabled ?: true) }
     // Port knocking — see core/knock module. Stored on ConnectionProfile,
     // applied per-protocol at the transport layer (ConnectionsViewModel
     // and DesktopViewModel). Honoured only on the direct-dial path.
@@ -2656,6 +2657,17 @@ fun ConnectionEditDialog(
                     }
 
                     CollapsibleSection("Reliability & MCP", secReliabilityExpanded, { secReliabilityExpanded = !secReliabilityExpanded }) {
+                        // Per-connection MCP/agent access. Off = agent tools that target
+                        // this connection are refused (and its row robot shows a slash).
+                        // Lets you pre-disable a connection the agent has never touched
+                        // (which otherwise shows no row robot to tap).
+                        BooleanToggleRow(
+                            label = stringResource(R.string.connections_toggle_mcp_enabled),
+                            checked = mcpEnabled,
+                            onCheckedChange = { mcpEnabled = it },
+                            description = stringResource(R.string.connections_helper_mcp_enabled),
+                        )
+                        Spacer(Modifier.height(8.dp))
                         // Tunnel-only mode (#150): bring up the SSH transport +
                         // port forwards without opening a terminal. Pair with
                         // unlimited reconnect for autossh-style keepalive.
@@ -3242,6 +3254,7 @@ fun ConnectionEditDialog(
                             reconnectMaxAttempts = reconnectMaxAttempts.toIntOrNull()?.coerceAtLeast(0) ?: 5,
                             reconnectOnNetworkChange = reconnectOnNetworkChange,
                             tunnelOnly = tunnelOnly,
+                            mcpEnabled = mcpEnabled,
                             sessionManager = selectedSessionManager,
                             useMosh = selectedTransport == "MOSH",
                             useEternalTerminal = selectedTransport == "ET",

@@ -1460,7 +1460,6 @@ private fun ConnectionTreeItem(
     onDragEnd: () -> Unit = {},
 ) {
     val profileStatus = profileStatuses[profile.id]
-    val mcpExposureKind = mcpExposure[profile.id]
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -1631,41 +1630,16 @@ private fun ConnectionTreeItem(
                     }
                 },
                 trailingContent = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // MCP-exposure badge: this connection serves Haven's MCP to
-                        // all its sessions. Filled = always-on (headless endpoint);
-                        // outlined = per-connection (rides interactive sessions).
-                        mcpExposureKind?.let { kind ->
-                            val headless = kind == McpExposureKind.HEADLESS
-                            AssistChip(
-                                onClick = onEdit,
-                                label = { Text(stringResource(R.string.connections_mcp_badge)) },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Filled.Cable,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(AssistChipDefaults.IconSize),
-                                    )
-                                },
-                                colors = if (headless) {
-                                    AssistChipDefaults.assistChipColors(
-                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                        labelColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        leadingIconContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    )
-                                } else {
-                                    AssistChipDefaults.assistChipColors()
-                                },
-                            )
-                        }
-                        // Per-connection MCP indicator: glows red-eyed while the agent is
-                        // operating on this connection; tap to disable/enable MCP for it.
-                        ConnectionMcpIndicator(
-                            lastActiveAt = agentActiveProfiles[profile.id],
-                            mcpEnabled = profile.mcpEnabled,
-                            onToggle = { onToggleMcp(!profile.mcpEnabled) },
-                        )
-                    }
+                    // The single per-connection MCP element (the old "carries the MCP
+                    // endpoint" badge was dropped in favour of robot-only): a tri-state
+                    // robot — hidden when the agent has never used this connection, a
+                    // slashed grey robot when MCP is disabled for it, and red-eyed while
+                    // the agent is operating on it. Tap toggles MCP access.
+                    ConnectionMcpIndicator(
+                        lastActiveAt = agentActiveProfiles[profile.id],
+                        mcpEnabled = profile.mcpEnabled,
+                        onToggle = { onToggleMcp(!profile.mcpEnabled) },
+                    )
                 },
                 modifier = Modifier
                     .weight(1f)

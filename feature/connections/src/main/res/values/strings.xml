@@ -506,4 +506,6 @@
     <string name="connections_mcp_badge">MCP</string>
     <string name="connections_mcp_active">Agent is operating on this connection — tap to disable MCP for it</string>
     <string name="connections_mcp_disabled">MCP disabled for this connection — tap to enable</string>
+    <string name="connections_toggle_mcp_enabled">Allow MCP agent on this connection</string>
+    <string name="connections_helper_mcp_enabled">When off, AI-agent (MCP) tools that target this connection are refused. The connection still works normally for you.</string>
 </resources>

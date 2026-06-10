@@ -46,6 +46,9 @@ internal const val AGENT_ACTIVE_WINDOW_MS = 30_000L
 /** Glowing-red used for the robot's eyes while the agent is active. */
 private val EYE_RED = Color(0xFFFF1F1F)
 
+/** The robot body lights up light blue while its eyes flash red (active). */
+private val ROBOT_BLUE = Color(0xFF4FC3F7)
+
 /**
  * A robot face that wakes with **glowing red eyes** while [active]. Shared by the header
  * [AgentActiveChip] and the per-connection [ConnectionMcpIndicator] so "the agent is
@@ -73,7 +76,12 @@ internal fun RobotEyesIcon(
         Icon(
             imageVector = Icons.Filled.SmartToy,
             contentDescription = contentDescription,
-            tint = if (disabled) baseTint.copy(alpha = 0.45f) else baseTint,
+            // Light blue body while the eyes flash red; dimmed when disabled; muted when idle.
+            tint = when {
+                disabled -> baseTint.copy(alpha = 0.45f)
+                active -> ROBOT_BLUE
+                else -> baseTint
+            },
             modifier = Modifier.size(size),
         )
         if (active && !disabled) {
@@ -150,7 +158,7 @@ internal fun AgentActiveChip(
     IconButton(onClick = onClick) {
         RobotEyesIcon(
             active = active,
-            baseTint = if (active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            baseTint = MaterialTheme.colorScheme.onSurfaceVariant,
             contentDescription = if (active) {
                 stringResource(R.string.connections_agent_active)
             } else {
