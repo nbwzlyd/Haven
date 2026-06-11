@@ -66,9 +66,24 @@ Generate Ed25519, RSA, and ECDSA keys on-device. Import keys from file (PEM/Open
 
 Browse Windows/Samba file shares with optional SSH tunneling for secure access over the internet.
 
+## Email
+
+An in-app mail client — read and send without leaving Haven. Two engines sit behind one `MailClient` abstraction (`Map<MailEngine, MailClient>`), so a new provider drops in without touching the UI:
+
+- **ProtonMail** — read mail via the Proton bridge protocol (the path the desktop Proton Bridge speaks), decrypted in the Go mailbridge.
+- **Generic IMAP/SMTP** — any standard mailbox: read **and** send.
+
+A folder and message list, a reader, and **compose / reply / forward** over IMAP/SMTP. **Multi-account** — a From-row account picker, with the message list and reader showing the active account. **Attachments** — save an attachment to, or attach a file from, any filesystem Haven already browses (local, SFTP, SMB, rclone) plus the Android document picker (SAF). Proton *send* is a follow-up; Proton is read-only today.
+
+### Mail Rules — inbound automation
+
+Rules that run against new mail. Each rule combines **match conditions** (from / to / subject / unread / has-attachment / body / header, with contains / equals / regex / glob) under ALL or ANY, with an ordered list of **actions** — mark read/unread, set/clear flag, move to folder, delete, notify, plus advanced actions an agent can author (run a command, save attachments, send to the agent, invoke an MCP tool). A **master switch** keeps automation inert until you enable it; a **firing history** logs what ran; and **destructive actions matched while Haven is backgrounded are held in a pending-approval queue** — approve to run them on the message, or reject to discard. Rules are authorable over MCP and managed in-app from the Mail screen's overflow menu; the in-app editor builds the human-friendly subset and opens agent-authored advanced rules read-only so it can't corrupt them.
+
+Mail is also exposed to the agent: `list_mail_folders`, `list_mail_messages`, `read_mail_message`, and `send_mail`, plus the Mail Rules tools (`create_mail_rule`, `list_mail_rules`, `delete_mail_rule`).
+
 ## Connections
 
-Saved profiles with transport selection (SSH, Mosh, Eternal Terminal, VNC, RDP, SMB, Cloud Storage, Reticulum), host key TOFU verification, fingerprint change detection, auto-reconnect with backoff, password fallback, local/remote/**dynamic** port forwarding (-L/-R/-D — the dynamic type runs a built-in SOCKS5 proxy that tunnels traffic through the SSH session), ProxyJump multi-hop tunneling (-J) with tree view, SOCKS5/SOCKS4/HTTP proxy support (Tor .onion compatible), RDP-over-SSH tunnel profiles, DNS resolution with 5s timeout, and connection error safety nets (20s UI watchdog, post-connect shell verification, session manager detection).
+Saved profiles with transport selection (SSH, Mosh, Eternal Terminal, VNC, RDP, SMB, Email, Cloud Storage, Reticulum), host key TOFU verification, fingerprint change detection, auto-reconnect with backoff, password fallback, local/remote/**dynamic** port forwarding (-L/-R/-D — the dynamic type runs a built-in SOCKS5 proxy that tunnels traffic through the SSH session), ProxyJump multi-hop tunneling (-J) with tree view, SOCKS5/SOCKS4/HTTP proxy support (Tor .onion compatible), RDP-over-SSH tunnel profiles, DNS resolution with 5s timeout, and connection error safety nets (20s UI watchdog, post-connect shell verification, session manager detection).
 
 ### Port knocking
 

@@ -63,6 +63,14 @@
 - [x] **rclone folder sync** — copy / mirror / move between remotes with include/exclude filters, size limits, bandwidth throttling, and dry-run preview; saved, reusable sync profiles; errors persisted to the connection log (#157, #158, #159)
 - [x] **Reticulum file transfer** — browse/download/upload over the mesh via rnsh remote command-exec (busybox-portable `ls -la` parsing, no GNU `stat`); uploads stream octal-encoded over a single Link, device-verified byte-identical including NUL/high bytes
 
+### Email
+- [x] **Embedded mail client** — read mail in-app from **ProtonMail** (via the Proton bridge protocol, decrypted in the Go mailbridge) and any generic **IMAP** account, behind one engine-routed `MailClient` abstraction (`Map<MailEngine, MailClient>`) so a second engine drops in without touching the UI
+- [x] **Send / compose** — IMAP/SMTP send with a compose / reply / forward UI (Proton send is a follow-up; Proton is read-only today)
+- [x] **Multi-account** — From-row account picker; the message list and reader show the active account
+- [x] **Attachments** — save-to and attach-from any browsable filesystem (local, SFTP, SMB, rclone) plus the Android document picker (SAF)
+- [x] **Mail Rules** — inbound-email automation: match conditions (from/to/subject/unread/attachment/body/header) → ordered actions (mark read/unread, flag, move, delete, notify, run-command, save-attachments, send-to-agent, invoke-MCP-tool), with a master switch, firing history, and a pending-approval queue for destructive actions matched while backgrounded; authorable over MCP and managed in-app from the Mail screen (Phase 5)
+- [x] **Mail MCP tools** — `list_mail_folders`, `list_mail_messages`, `read_mail_message`, `send_mail`, plus the Mail Rules tools (`create_mail_rule`, `list_mail_rules`, `delete_mail_rule`)
+
 ### Media tools
 - [x] **ffmpeg integration** — custom FFmpeg 8.0 build (full codec/format/filter set) wired into the file browser. Long-press any media file to convert; works on local, SFTP, SMB, and rclone. Container + video + audio encoder dropdowns with copy-remux defaults. Frame preview with filter live-update, fullscreen view, and seek slider. Audio preview (5-second playback with filters applied). Video filters (brightness, contrast, saturation, gamma, sharpen, denoise, deshake, auto color, speed, rotation) and audio filters (volume, EBU R128 normalize). "Save to" picker: Downloads or back to source folder with upload progress.
 - [x] **Rclone cloud media streaming** — ffmpeg reads source files from rclone via HTTP + Range requests through the rclone VFS, so convert/preview/stream all start in seconds regardless of file size. Optional "Download first" toggle for offline conversion.

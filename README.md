@@ -5,13 +5,14 @@
 <h1 align="center">Haven</h1>
 
 <p align="center">
-  Free SSH, VNC, RDP, SFTP &amp; cloud storage client for Android
+  Free, open-source remote access &amp; mobile workspace for Android —<br/>
+  SSH · Mosh · VNC · RDP · SFTP · SMB · email · cloud storage, a local Linux shell, mesh networking, and a consent-gated AI-agent endpoint
 </p>
 
 > *"Haven is an interesting vibe coding experiment. Let's see what comes out of it."* — DBP
 
 <p align="center">
-  <a href="https://github.com/GlassHaven/Haven/releases/latest"><img src="https://img.shields.io/badge/release-v5.59.44-blue?style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/GlassHaven/Haven/releases/latest"><img src="https://img.shields.io/github/v/release/GlassHaven/Haven?style=flat-square&label=release&color=blue" alt="Release" /></a>
   <a href="https://f-droid.org/en/packages/sh.haven.app"><img src="https://img.shields.io/f-droid/v/sh.haven.app?style=flat-square" alt="F-Droid" /></a>
   <a href="https://github.com/GlassHaven/Haven/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://github.com/GlassHaven/Haven/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-orange?style=flat-square" alt="License" /></a>
@@ -49,6 +50,7 @@
 - **Terminal** — Mosh / Eternal Terminal / SSH with tmux-aware session restore, configurable keyboard toolbar, OSC 7/8/9/52/777 integration. Bundled Hack Nerd Font Mono renders Powerline / Devicons / Font Awesome / Material Design glyphs in shell prompts out of the box.
 - **Desktop** — VNC (RFB 3.8 with VeNCrypt), RDP (via IronRDP, with EGFX graphics-pipeline support), a GPU-accelerated native Wayland compositor (labwc on GLES2), and a multi-distro local-desktop manager: install Alpine, Debian, Arch, or Void side-by-side and run Xfce4 / Openbox (X11) or Sway (nested Wayland, via wayvnc) desktops.
 - **Files** — Unified browser for SFTP/SCP, SMB, 60+ cloud providers, and Reticulum mesh. Multi-select, built-in editor, image tools, chmod, cross-filesystem copy/move.
+- **Email** — An in-app mail client: read ProtonMail (via the Proton bridge protocol) and any IMAP account; compose / reply / forward, multi-account, and attachments (save-to / attach-from any browsable filesystem) over IMAP/SMTP; plus **Mail Rules** — inbound automation (match → mark / flag / move / delete / notify, agent- or human-authored) with a master switch, firing history, and an approval queue for destructive actions while backgrounded, managed from the Mail screen.
 - **Media** — Transcode and stream on-device with FFmpeg 8.0; HLS streaming to the LAN; DLNA server for cloud media.
 - **Keys** — On-device Ed25519/RSA/ECDSA generation, FIDO2/SK hardware keys (NFC + USB), deploy-key helper.
 - **Connections** — Host-key TOFU, port forwarding (-L/-R/-D/-J), SOCKS/HTTP proxies, Tor, ProxyJump, **per-app WireGuard and Tailscale tunnels** (userspace, no system VPN slot — each profile can route through its own tunnel without affecting other apps), and **port knocking / Single Packet Authorization** — fire a TCP/UDP knock sequence, or send a native fwknop SPA packet (AES-256-CBC + HMAC-SHA256, interoperable with `fwknopd`), at the remote firewall before the real connect, with per-profile fields and in-dialog "Test knock" / "Test SPA" buttons.
@@ -71,7 +73,7 @@ Available in 12 languages: English, Chinese (simplified), Spanish, Hindi, Arabic
 | [GitHub Releases](https://github.com/GlassHaven/Haven/releases/latest) | Signed APK, all features |
 | [F-Droid](https://f-droid.org/en/packages/sh.haven.app) | Built from source, all features |
 
-Both builds are identical — SSH, Mosh, Eternal Terminal, VNC, RDP, SFTP, and Cloud Storage. IronRDP (Rust) is built from source via `cargo-ndk`. rclone (Go) is built from source via `gomobile`.
+Both builds are identical — SSH, Mosh, Eternal Terminal, VNC, RDP, SFTP, SMB, email, and cloud storage. IronRDP (Rust) is built from source via `cargo-ndk`. rclone (Go) is built from source via `gomobile`.
 
 ## Build from source
 
