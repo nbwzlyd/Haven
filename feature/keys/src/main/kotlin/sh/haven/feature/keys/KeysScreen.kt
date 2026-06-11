@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -524,7 +526,10 @@ private fun AddKeyChooser(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.keys_add_ssh_key)) },
         text = {
-            Column {
+            // The chooser has 7+ tall ListItems; on a short portrait screen the
+            // AlertDialog caps at the viewport height and a plain Column clips the
+            // last option(s) with no way to reach them. Make it scrollable (#238-adjacent).
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 ListItem(
                     modifier = Modifier.clickable { onGenerate() },
                     headlineContent = { Text(stringResource(R.string.keys_generate_new_key)) },
