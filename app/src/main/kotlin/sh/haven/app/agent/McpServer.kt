@@ -62,6 +62,12 @@ private const val TAG = "McpServer"
  *  clears the orphaned prompt in a finally block so the sheet never sticks. */
 private const val CONSENT_WAIT_MS: Long = 55_000L
 
+/** The one MCP resources/read resource: a live snapshot of Haven's own rendered UI.
+ *  The file-shaped sibling of the `capture_haven_ui` tool — an agent reads it to
+ *  see the current screen without a tool call (VISION.md §1a). (Don't write the
+ *  literal slash-star resources glob in a kdoc; it opens a nested block comment.) */
+private const val UI_SCREEN_RESOURCE_URI = "ui://haven/screen"
+
 /** Backoff between WireGuard (re)bind attempts when no tunnel is up yet
  *  or the listener dropped (roam re-handshake, tunnel released). */
 private const val WG_RETRY_MS: Long = 5_000L
@@ -1088,6 +1094,8 @@ class McpServer @Inject constructor(
             "notifications/initialized" -> JSONObject() // ack
             "tools/list" -> handleToolsList()
             "tools/call" -> handleToolsCall(params, trusted)
+            "resources/list" -> handleResourcesList()
+            "resources/read" -> handleResourcesRead(params, trusted)
             "ping" -> JSONObject()
             else -> throw McpError(-32601, "Method not found: $method")
         }
@@ -1169,8 +1177,12 @@ class McpServer @Inject constructor(
             put("version", sh.haven.app.BuildConfig.VERSION_NAME)
         })
         put("capabilities", JSONObject().apply {
-            // Advertise tools capability only in v1
             put("tools", JSONObject().apply {
+                put("listChanged", false)
+            })
+            // One resource: Haven's own rendered screen (ui://haven/screen).
+            put("resources", JSONObject().apply {
+                put("subscribe", false)
                 put("listChanged", false)
             })
         })
@@ -1185,6 +1197,61 @@ class McpServer @Inject constructor(
             put("tools", JSONArray().apply {
                 tools.definitions().forEach { put(it) }
             })
+        }
+    }
+
+    private fun handleResourcesList(): JSONObject = JSONObject().apply {
+        put("resources", JSONArray().put(JSONObject().apply {
+            put("uri", UI_SCREEN_RESOURCE_URI)
+            put("name", "Haven UI screen")
+            put(
+                "description",
+                "A live PNG screenshot of Haven's OWN rendered screen — the app UI the user is " +
+                    "looking at right now. Read it to see the current Haven UI without a tool call; " +
+                    "the file-shaped sibling of the capture_haven_ui tool. FLAG_SECURE (screen " +
+                    "security on) and Haven-not-foreground are returned as read errors.",
+            )
+            put("mimeType", "image/png")
+        }))
+    }
+
+    private fun handleResourcesRead(params: JSONObject, trusted: Boolean): JSONObject {
+        val uri = params.optString("uri")
+        if (uri != UI_SCREEN_RESOURCE_URI) {
+            throw McpError(-32602, "Unknown resource uri: '$uri'. Call resources/list for what's available.")
+        }
+        // A screen read can expose credentials, so it carries the SAME gate as
+        // the capture_haven_ui tool (ONCE_PER_SESSION) — and shares its memo key
+        // (toolName) so a prior allow covers both and the resource can't be used
+        // to bypass the tool's consent. Loopback stays auto-trusted.
+        if (!trusted) {
+            val decision = runBlocking {
+                withTimeoutOrNull(CONSENT_WAIT_MS) {
+                    consentManager.requestConsent(
+                        toolName = "capture_haven_ui",
+                        clientHint = lastClientHint,
+                        summary = "Let the agent see Haven's own screen",
+                        level = ConsentLevel.ONCE_PER_SESSION,
+                    )
+                }
+            }
+            when (decision) {
+                ConsentDecision.DENY -> throw ConsentDeniedError("capture_haven_ui")
+                null -> throw McpError(
+                    -32012,
+                    "Consent prompt for the Haven UI screen wasn't answered in time — approve it " +
+                        "on the device and retry.",
+                )
+                else -> { /* ALLOW — proceed */ }
+            }
+        }
+        val (b64, mime) = runBlocking { tools.readUiScreenResource() }
+        return JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("uri", uri)
+                put("mimeType", mime)
+                put("blob", b64)
+            }))
         }
     }
 

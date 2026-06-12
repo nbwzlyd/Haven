@@ -132,6 +132,33 @@ class HavenUiToolsTest {
     }
 
     @Test
+    fun `readUiScreenResource maps a secure window to a read error`() = runTest {
+        val bridge = mockk<HavenUiBridge>()
+        coEvery { bridge.captureScreen() } returns HavenUiBridge.CaptureResult.Secure
+        try {
+            newTools(bridge).readUiScreenResource()
+            error("expected McpError when the window is secure")
+        } catch (e: McpError) {
+            assertEquals(-32603, e.code)
+            assertTrue((e.message ?: "").contains("FLAG_SECURE"))
+        }
+    }
+
+    @Test
+    fun `readUiScreenResource maps no-foreground to a read error`() = runTest {
+        val bridge = mockk<HavenUiBridge>()
+        coEvery { bridge.captureScreen() } returns
+            HavenUiBridge.CaptureResult.NoForeground("Haven is not in the foreground — bring the app forward, then retry.")
+        try {
+            newTools(bridge).readUiScreenResource()
+            error("expected McpError when not foreground")
+        } catch (e: McpError) {
+            assertEquals(-32603, e.code)
+            assertTrue((e.message ?: "").contains("foreground"))
+        }
+    }
+
+    @Test
     fun `swipe_haven_ui requires all four coordinates`() = runTest {
         val bridge = mockk<HavenUiBridge>()
         try {

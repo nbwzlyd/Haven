@@ -620,4 +620,51 @@ class McpServerConsentTest {
             obj.optJSONObject("error"),
         )
     }
+
+    // --- resources/* (ui://haven/screen) ---
+
+    private fun rpc(method: String, params: JSONObject? = null): String =
+        JSONObject().put("jsonrpc", "2.0").put("id", 30).put("method", method)
+            .apply { if (params != null) put("params", params) }.toString()
+
+    @Test
+    fun `initialize advertises the resources capability`() {
+        val (server, _) = newServer()
+        val response = server.handleJsonRpc(initBody())
+        val caps = JSONObject(response).getJSONObject("result").getJSONObject("capabilities")
+        assertTrue("resources capability must be advertised", caps.has("resources"))
+    }
+
+    @Test
+    fun `resources_list returns the Haven UI screen resource`() {
+        val (server, _) = newServer()
+        server.pair()
+        val response = server.handleJsonRpc(rpc("resources/list"))
+        val resources = JSONObject(response).getJSONObject("result").getJSONArray("resources")
+        assertEquals(1, resources.length())
+        assertEquals("ui://haven/screen", resources.getJSONObject(0).getString("uri"))
+    }
+
+    @Test
+    fun `resources_read rejects an unknown uri`() {
+        val (server, _) = newServer()
+        server.pair()
+        val response = server.handleJsonRpc(
+            rpc("resources/read", JSONObject().put("uri", "ui://haven/bogus")),
+        )
+        assertEquals(-32602, JSONObject(response).getJSONObject("error").getInt("code"))
+    }
+
+    @Test
+    fun `resources_read of the screen with no foreground is denied by consent`() {
+        // The screen resource shares capture_haven_ui's ONCE_PER_SESSION gate;
+        // a default AgentConsentManager has foregroundActive=false, so it fails
+        // closed (DENIED) before the bridge is ever touched.
+        val (server, _) = newServer()
+        server.pair()
+        val response = server.handleJsonRpc(
+            rpc("resources/read", JSONObject().put("uri", "ui://haven/screen")),
+        )
+        assertEquals(-32000, JSONObject(response).getJSONObject("error").getInt("code"))
+    }
 }

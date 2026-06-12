@@ -8185,6 +8185,30 @@ internal class McpTools(
         }
     }
 
+    /**
+     * Capture Haven's own screen for the `ui://haven/screen` MCP resource —
+     * the file-shaped sibling of [captureHavenUi]. Returns (base64 PNG,
+     * mimeType); throws [McpError] for the secure / no-foreground / failed
+     * cases (resources/read has no structured "secure" channel, so they map
+     * to read errors). Called by `McpServer.handleResourcesRead`.
+     */
+    suspend fun readUiScreenResource(): Pair<String, String> {
+        return when (val r = havenUiBridge.captureScreen()) {
+            is HavenUiBridge.CaptureResult.Ok -> {
+                val enc = withContext(Dispatchers.Default) { encodeBitmapScaled(r.bitmap, 1080, "png") }
+                r.bitmap.recycle()
+                enc.first to "image/png"
+            }
+            HavenUiBridge.CaptureResult.Secure -> throw McpError(
+                -32603,
+                "Screen security (FLAG_SECURE) is on — Haven's own UI cannot be captured. " +
+                    "Turn off Settings → screen security to allow it.",
+            )
+            is HavenUiBridge.CaptureResult.NoForeground -> throw McpError(-32603, r.reason)
+            is HavenUiBridge.CaptureResult.Failed -> throw McpError(-32603, r.reason)
+        }
+    }
+
     private suspend fun tapHavenUi(args: JSONObject): JSONObject {
         val x = requireIntArg(args, "x")
         val y = requireIntArg(args, "y")
