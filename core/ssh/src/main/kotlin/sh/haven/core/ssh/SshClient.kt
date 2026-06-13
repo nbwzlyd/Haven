@@ -14,6 +14,7 @@ import sh.haven.core.fido.SkKeyData
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.net.DatagramPacket
@@ -99,7 +100,8 @@ class SshClient : Closeable {
      */
     private fun applyAuthMethods(config: ConnectionConfig, sess: Session): CharArray? {
         var fallbackKiPassword: CharArray? = null
-        for (auth in flattenAuth(config.authMethod)) {
+        val flat = flattenAuth(config.authMethod)
+        for (auth in flat) {
             when (auth) {
                 is ConnectionConfig.AuthMethod.Multi -> { /* flattened above */ }
                 is ConnectionConfig.AuthMethod.Password -> {
@@ -137,27 +139,70 @@ class SshClient : Closeable {
                         )
                     }
                 }
-                is ConnectionConfig.AuthMethod.FidoKey -> {
-                    val skData = SkKeyData.deserialize(auth.skKeyData)
-                    Log.d(TAG, "FIDO2 SK key: alg=${skData.algorithmName}")
-                    val fidoIdentity = FidoIdentity(skData, fidoAuthenticator!!, auth.keyLabel)
-                    val identity = if (auth.certBytes != null) {
-                        val certKeyType = SshCertificateParser.getCertKeyType(skData.algorithmName)
-                        CertificateWrappedIdentity(fidoIdentity, auth.certBytes, certKeyType)
-                    } else fidoIdentity
-                    jsch.addIdentity(identity, null)
-                    val currentAlgs = sess.getConfig("PubkeyAcceptedAlgorithms") ?: ""
-                    val skAlgs = "sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com"
-                    val skCertAlgs = "sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com"
-                    val advertised = if (auth.certBytes != null) "$skCertAlgs,$skAlgs" else skAlgs
-                    sess.setConfig(
-                        "PubkeyAcceptedAlgorithms",
-                        if (currentAlgs.isNotEmpty()) "$advertised,$currentAlgs" else advertised,
-                    )
+                // SK (FIDO2) keys are collected and added together below, so a
+                // profile listing several can accept whichever key the user
+                // actually presents instead of insisting on the first (#237).
+                is ConnectionConfig.AuthMethod.FidoKey -> { }
+            }
+        }
+        applyFidoAuth(flat.filterIsInstance<ConnectionConfig.AuthMethod.FidoKey>(), sess)
+        return fallbackKiPassword
+    }
+
+    /**
+     * Add the profile's SK (FIDO2) keys as JSch identities. A single key is
+     * added directly. With several, [FidoAuthenticator.detectPresentSkKey] asks
+     * the user to present any one of them and adds only the detected key
+     * (either/or, #237) — so SSH's "server accepts the first trusted key" rule
+     * doesn't force whichever key is listed first. If nothing is detected (all
+     * verify-required, or no key presented in time) it falls back to adding all
+     * keys in listed order — the pre-existing behaviour.
+     */
+    private fun applyFidoAuth(fidoAuths: List<ConnectionConfig.AuthMethod.FidoKey>, sess: Session) {
+        when {
+            fidoAuths.isEmpty() -> return
+            fidoAuths.size == 1 -> addFidoIdentity(fidoAuths[0], sess)
+            else -> {
+                val candidates = fidoAuths.map { SkKeyData.deserialize(it.skKeyData) }
+                val detected = try {
+                    runBlocking { fidoAuthenticator?.detectPresentSkKey(candidates, keyLabel = null) }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Either/or SK detection failed: ${e.message}")
+                    null
+                }
+                val chosen = detected?.let { d ->
+                    fidoAuths.firstOrNull {
+                        SkKeyData.deserialize(it.skKeyData).credentialId.contentEquals(d.credentialId)
+                    }
+                }
+                if (chosen != null) {
+                    Log.d(TAG, "Either/or: offering the presented SK key only")
+                    addFidoIdentity(chosen, sess)
+                } else {
+                    Log.d(TAG, "Either/or: no key detected — offering all ${fidoAuths.size} in order")
+                    fidoAuths.forEach { addFidoIdentity(it, sess) }
                 }
             }
         }
-        return fallbackKiPassword
+    }
+
+    private fun addFidoIdentity(auth: ConnectionConfig.AuthMethod.FidoKey, sess: Session) {
+        val skData = SkKeyData.deserialize(auth.skKeyData)
+        Log.d(TAG, "FIDO2 SK key: alg=${skData.algorithmName}")
+        val fidoIdentity = FidoIdentity(skData, fidoAuthenticator!!, auth.keyLabel)
+        val identity = if (auth.certBytes != null) {
+            val certKeyType = SshCertificateParser.getCertKeyType(skData.algorithmName)
+            CertificateWrappedIdentity(fidoIdentity, auth.certBytes, certKeyType)
+        } else fidoIdentity
+        jsch.addIdentity(identity, null)
+        val currentAlgs = sess.getConfig("PubkeyAcceptedAlgorithms") ?: ""
+        val skAlgs = "sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com"
+        val skCertAlgs = "sk-ssh-ed25519-cert-v01@openssh.com,sk-ecdsa-sha2-nistp256-cert-v01@openssh.com"
+        val advertised = if (auth.certBytes != null) "$skCertAlgs,$skAlgs" else skAlgs
+        sess.setConfig(
+            "PubkeyAcceptedAlgorithms",
+            if (currentAlgs.isNotEmpty()) "$advertised,$currentAlgs" else advertised,
+        )
     }
 
     /**

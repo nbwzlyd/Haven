@@ -47,6 +47,9 @@ data class FidoAssertionResult(
     val signature: ByteArray,
     val flags: Byte,
     val counter: Int,
+    /** Which credential the key signed with — set when the request offered
+     *  several (the either/or flow); null for single-credential assertions. */
+    val usedCredentialId: ByteArray? = null,
 )
 
 /**
@@ -319,10 +322,10 @@ class FidoAuthenticator @Inject constructor(
 
                         val result = when (device) {
                             is ConnectedDevice.Usb -> performUsbAssertion(
-                                device.device, rpId, clientDataHash, credentialId, requireUv, prePin,
+                                device.device, rpId, clientDataHash, listOf(credentialId), requireUv, prePin,
                             )
                             is ConnectedDevice.Nfc -> performNfcAssertion(
-                                device.tag, rpId, clientDataHash, credentialId, requireUv, prePin,
+                                device.tag, rpId, clientDataHash, listOf(credentialId), requireUv, prePin,
                             )
                         }
 
@@ -845,13 +848,76 @@ class FidoAuthenticator @Inject constructor(
         Log.d(TAG, "USB permission granted for $deviceName")
     }
 
+    /**
+     * Either/or detection (#237 follow-up): present ANY of the [candidates]
+     * security keys and return the one actually presented, so a profile that
+     * lists several SK keys accepts whichever the user has to hand instead of
+     * insisting on the first-listed one.
+     *
+     * Probes with a presence-free (`up = false`) GetAssertion whose allowList
+     * holds every candidate's credential — the key answers with the credential
+     * it owns, and the response's credential field tells us which. Only
+     * **presence-only** candidates are probed; verify-required ones need a PIN
+     * to even assert, so they're left to the order-based fallback. Credentials
+     * are grouped by rpId (one GetAssertion can only carry one rpId).
+     *
+     * Returns the matched [SkKeyData], or null if nothing was detected (caller
+     * falls back to offering all keys in order — the pre-existing behaviour).
+     */
+    suspend fun detectPresentSkKey(
+        candidates: List<SkKeyData>,
+        keyLabel: String? = null,
+    ): SkKeyData? = withContext(Dispatchers.IO) {
+        // Only presence-only credentials can be probed touch/PIN-free.
+        val probeable = candidates.filter { (it.flags.toInt() and 0x04) == 0 }
+        if (probeable.size < 2) return@withContext null
+        currentKeyLabel = keyLabel
+        val byRpId = probeable.groupBy { it.application }
+        val dummyHash = ByteArray(32)
+        Log.d(TAG, "Either/or detect: ${probeable.size} candidate key(s), ${byRpId.size} rpId group(s)")
+        try {
+            withDiscoveredFidoDevice { device ->
+                for ((rpId, group) in byRpId) {
+                    val creds = group.map { it.credentialId }
+                    val result = try {
+                        when (device) {
+                            is ConnectedDevice.Usb -> performUsbAssertion(
+                                device.device, rpId, dummyHash, creds, requireUv = false, prePin = null, up = false,
+                            )
+                            is ConnectedDevice.Nfc -> performNfcAssertion(
+                                device.tag, rpId, dummyHash, creds, requireUv = false, prePin = null, up = false,
+                            )
+                        }
+                    } catch (_: FidoNoMatchingCredentialException) {
+                        continue // the present key holds none of this rpId group — try the next
+                    }
+                    // With >1 allowList entry the key reports which credential it
+                    // used; with exactly one the field is omitted, so it's that one.
+                    val used = result.usedCredentialId ?: creds.singleOrNull()
+                    val match = group.firstOrNull { used != null && it.credentialId.contentEquals(used) }
+                    if (match != null) {
+                        Log.d(TAG, "Either/or detect: present key holds credential ${match.credentialId.size}b (rpId=$rpId)")
+                        return@withDiscoveredFidoDevice match
+                    }
+                }
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Either/or key detection failed (${e.javaClass.simpleName}: ${e.message}); falling back to ordered keys")
+            null
+        } finally {
+            _touchPrompt.value = null
+        }
+    }
+
     private suspend fun performUsbAssertion(
         device: UsbDevice,
         rpId: String,
         clientDataHash: ByteArray,
-        credentialId: ByteArray,
+        credentialIds: List<ByteArray>,
         requireUv: Boolean,
         prePin: String?,
+        up: Boolean = true,
     ): FidoAssertionResult {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         ensureUsbPermission(usbManager, device)
@@ -869,8 +935,8 @@ class FidoAuthenticator @Inject constructor(
                 Log.d(TAG, "CTAPHID init...")
                 transport.init()
                 return runGetAssertionExchange(
-                    rpId, clientDataHash, credentialId, requireUv, prePin,
-                    FidoTouchPrompt.TouchKey.Transport.USB,
+                    rpId, clientDataHash, credentialIds, requireUv, prePin,
+                    FidoTouchPrompt.TouchKey.Transport.USB, up = up,
                 ) { cmd ->
                     transport.sendCborCommand(cmd) {
                         _touchPrompt.value =
@@ -889,9 +955,10 @@ class FidoAuthenticator @Inject constructor(
         tag: Tag,
         rpId: String,
         clientDataHash: ByteArray,
-        credentialId: ByteArray,
+        credentialIds: List<ByteArray>,
         requireUv: Boolean,
         prePin: String?,
+        up: Boolean = true,
     ): FidoAssertionResult {
         val isoDep = IsoDep.get(tag) ?: throw IOException("Tag does not support ISO-DEP")
 
@@ -899,8 +966,8 @@ class FidoAuthenticator @Inject constructor(
             transport.connect()
             transport.select()
             return runGetAssertionExchange(
-                rpId, clientDataHash, credentialId, requireUv, prePin,
-                FidoTouchPrompt.TouchKey.Transport.NFC,
+                rpId, clientDataHash, credentialIds, requireUv, prePin,
+                FidoTouchPrompt.TouchKey.Transport.NFC, up = up,
             ) { cmd -> transport.sendCborCommand(cmd) }
         }
     }
@@ -927,10 +994,11 @@ class FidoAuthenticator @Inject constructor(
     private suspend fun runGetAssertionExchange(
         rpId: String,
         clientDataHash: ByteArray,
-        credentialId: ByteArray,
+        credentialIds: List<ByteArray>,
         requireUv: Boolean,
         prePin: String?,
         touchTransport: FidoTouchPrompt.TouchKey.Transport,
+        up: Boolean = true,
         send: (ByteArray) -> ByteArray,
     ): FidoAssertionResult {
         var pinUvAuthParam: ByteArray? = null
@@ -952,9 +1020,10 @@ class FidoAuthenticator @Inject constructor(
             Ctap2Cbor.encodeGetAssertionCommand(
                 rpId = rpId,
                 clientDataHash = clientDataHash,
-                credentialId = credentialId,
+                credentialIds = credentialIds,
                 pinUvAuthParam = pinUvAuthParam,
                 pinUvAuthProtocol = pinProtocol,
+                up = up,
             )
         )
 
@@ -970,9 +1039,10 @@ class FidoAuthenticator @Inject constructor(
                 Ctap2Cbor.encodeGetAssertionCommand(
                     rpId = rpId,
                     clientDataHash = clientDataHash,
-                    credentialId = credentialId,
+                    credentialIds = credentialIds,
                     pinUvAuthParam = proto.authenticate(token, clientDataHash),
                     pinUvAuthProtocol = proto.version,
+                    up = up,
                 )
             )
         }
@@ -1364,6 +1434,7 @@ class FidoAuthenticator @Inject constructor(
             signature = parsed.signature,
             flags = flags,
             counter = counter,
+            usedCredentialId = parsed.usedCredentialId,
         )
     }
 

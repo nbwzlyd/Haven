@@ -66,6 +66,13 @@ object Ctap2Cbor {
     data class AssertionResponse(
         val authData: ByteArray,
         val signature: ByteArray,
+        /**
+         * The credential the authenticator actually used (response key 1's
+         * `id`), present when the request's allowList had more than one entry —
+         * which is how the either/or flow learns *which* of several configured
+         * SK keys the user presented. Null for single-credential requests.
+         */
+        val usedCredentialId: ByteArray? = null,
     )
 
     /** Parsed authenticatorGetInfo response (only the fields Haven uses). */
@@ -99,7 +106,27 @@ object Ctap2Cbor {
         credentialId: ByteArray,
         pinUvAuthParam: ByteArray? = null,
         pinUvAuthProtocol: Int? = null,
+        up: Boolean = true,
+    ): ByteArray = encodeGetAssertionCommand(
+        rpId, clientDataHash, listOf(credentialId), pinUvAuthParam, pinUvAuthProtocol, up,
+    )
+
+    /**
+     * Multi-credential variant: the allowList carries every [credentialIds]
+     * entry, so whichever security key is presented signs with the credential
+     * it actually holds — the basis of the either/or flow (#237). [up] = false
+     * does a presence-free probe used only to detect *which* key is present
+     * (the real signing assertion still uses up = true).
+     */
+    fun encodeGetAssertionCommand(
+        rpId: String,
+        clientDataHash: ByteArray,
+        credentialIds: List<ByteArray>,
+        pinUvAuthParam: ByteArray? = null,
+        pinUvAuthProtocol: Int? = null,
+        up: Boolean = true,
     ): ByteArray {
+        require(credentialIds.isNotEmpty()) { "allowList must have at least one credential" }
         val out = ByteArrayOutputStream()
         out.write(CMD_GET_ASSERTION.toInt())
 
@@ -114,20 +141,22 @@ object Ctap2Cbor {
         encodeUint(out, 2)
         encodeByteString(out, clientDataHash)
 
-        // 3: allowList[{id, type}]
+        // 3: allowList[{id, type}, …]
         encodeUint(out, 3)
-        encodeArrayHeader(out, 1)
-        encodeMapHeader(out, 2)
-        encodeTextString(out, "id")
-        encodeByteString(out, credentialId)
-        encodeTextString(out, "type")
-        encodeTextString(out, "public-key")
+        encodeArrayHeader(out, credentialIds.size)
+        for (credentialId in credentialIds) {
+            encodeMapHeader(out, 2)
+            encodeTextString(out, "id")
+            encodeByteString(out, credentialId)
+            encodeTextString(out, "type")
+            encodeTextString(out, "public-key")
+        }
 
-        // 5: options {up: true}
+        // 5: options {up}
         encodeUint(out, 5)
         encodeMapHeader(out, 1)
         encodeTextString(out, "up")
-        encodeBoolean(out, true)
+        encodeBoolean(out, up)
 
         // 6, 7: pinUvAuthParam + protocol (only when UV path is in use)
         if (pinUvAuthParam != null) {
@@ -147,11 +176,12 @@ object Ctap2Cbor {
 
         var authData: ByteArray? = null
         var signature: ByteArray? = null
+        var usedCredentialId: ByteArray? = null
 
         for (i in 0 until mapSize) {
             val key = readSignedInt(buf)
             when (key) {
-                1 -> skipValue(buf)
+                1 -> usedCredentialId = readCredentialDescriptorId(buf)
                 2 -> authData = readByteString(buf)
                 3 -> signature = readByteString(buf)
                 else -> skipValue(buf)
@@ -160,7 +190,21 @@ object Ctap2Cbor {
 
         requireNotNull(authData) { "GetAssertion response missing authData (key 2)" }
         requireNotNull(signature) { "GetAssertion response missing signature (key 3)" }
-        return AssertionResponse(authData, signature)
+        return AssertionResponse(authData, signature, usedCredentialId)
+    }
+
+    /**
+     * Read a PublicKeyCredentialDescriptor map (`{id: bytes, type: tstr, …}`)
+     * and return its `id`. Used to learn which credential a multi-credential
+     * GetAssertion actually matched.
+     */
+    private fun readCredentialDescriptorId(buf: ByteBuffer): ByteArray? {
+        val size = readMapHeader(buf)
+        var id: ByteArray? = null
+        for (i in 0 until size) {
+            if (readTextString(buf) == "id") id = readByteString(buf) else skipValue(buf)
+        }
+        return id
     }
 
     // ---------- authenticatorMakeCredential ----------
