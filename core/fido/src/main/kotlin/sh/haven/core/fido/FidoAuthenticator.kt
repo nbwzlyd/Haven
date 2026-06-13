@@ -19,6 +19,7 @@ import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,6 +43,13 @@ private const val USB_PERMISSION_TIMEOUT_MS = 30_000L
  * a wrong key (NO_CREDENTIALS) before giving up, counting the first try (#237).
  */
 private const val MAX_MISMATCH_ATTEMPTS = 3
+
+/**
+ * How long to hold the "wrong key — present <name>" prompt before re-arming on
+ * the non-PIN auto-retry path (#237 a/b → option (a)). Without it a still-present
+ * wrong tap burns through the attempts in ~0.5s flashes that can't be read.
+ */
+private const val WRONG_KEY_HOLD_MS = 1500L
 
 data class FidoAssertionResult(
     val signature: ByteArray,
@@ -411,6 +419,19 @@ class FidoAuthenticator @Inject constructor(
                     }
                 } catch (e: FidoNoMatchingCredentialException) {
                     thisUsbId?.let { failedUsbIds += it }
+                    // Verify-required (PIN) keys: CTAP2 runs the PIN/UV exchange
+                    // BEFORE the assertion can check the credential, so an
+                    // auto-retry on a wrong key is "PIN → wrong → PIN → …". Don't
+                    // loop — surface one clear, labelled error and stop (#237 a/b →
+                    // option (b) for PIN keys). Non-PIN keys keep the tap-again
+                    // auto-retry (option (a)) below.
+                    if (requireUv) {
+                        val name = currentKeyLabel?.let { "\"$it\"" } ?: "the configured key"
+                        val msg = "That security key isn't $name — reconnect and present $name."
+                        lastAssertionError = msg
+                        Log.w(TAG, "Verify-required wrong key — not auto-retrying to avoid a PIN loop")
+                        throw FidoNoMatchingCredentialException(msg)
+                    }
                     if (attempt >= MAX_MISMATCH_ATTEMPTS) {
                         lastAssertionError = e.message
                         Log.w(TAG, "No matching credential after $attempt attempt(s); giving up")
@@ -418,6 +439,11 @@ class FidoAuthenticator @Inject constructor(
                     }
                     Log.w(TAG, "Wrong key (attempt $attempt/$MAX_MISMATCH_ATTEMPTS) — " +
                         "re-prompting for ${currentKeyLabel ?: "the correct key"}")
+                    // (a) Hold the "present <name>" message long enough to read
+                    // before re-arming; the previous discovery's finally cleared
+                    // the prompt, so re-show WrongKey for the pause.
+                    _touchPrompt.value = FidoTouchPrompt.WrongKey(currentKeyLabel, MAX_MISMATCH_ATTEMPTS - attempt)
+                    delay(WRONG_KEY_HOLD_MS)
                     // Loop: withDiscoveredFidoDevice re-arms discovery excluding
                     // the failed USB key and shows the WrongKey prompt.
                 }
