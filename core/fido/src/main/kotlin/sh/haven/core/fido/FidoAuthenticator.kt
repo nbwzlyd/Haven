@@ -1321,13 +1321,18 @@ class FidoAuthenticator @Inject constructor(
             submit = { pin -> if (!deferred.isCompleted) deferred.complete(pin) },
             retriesRemaining = retriesRemaining,
         )
-        return try {
-            deferred.await()
-        } finally {
-            // Caller flips _touchPrompt to TouchKey or null next; clearing here
-            // would briefly hide the dialog. Leaving the EnterPin state in place
-            // is fine since the next line of the caller reassigns it.
+        val result = deferred.await()
+        // On submit (non-null) the caller advances _touchPrompt (TouchKey, or
+        // null via withDiscoveredFidoDevice's finally) on its next step, so
+        // leave the EnterPin in place to avoid a flicker. On CANCEL (null) the
+        // caller THROWS instead of reassigning — e.g. the verify-required
+        // pre-collect `promptPin(null) ?: throw` — so nothing else clears the
+        // dialog and it would linger with a now-dead Cancel button. Clear it
+        // here so cancel actually dismisses the popup (#237 pre-collect fix).
+        if (result == null) {
+            _touchPrompt.value = null
         }
+        return result
     }
 
     /** Throw a descriptive IOException if [response] does not lead with STATUS_OK. */
