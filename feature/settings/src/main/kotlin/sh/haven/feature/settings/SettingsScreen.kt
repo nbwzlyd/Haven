@@ -1543,17 +1543,11 @@ fun SettingsScreen(
         // (which only forwards explicitly-wrapped sequences). Needs
         // `set -g allow-passthrough on` in tmux < 3.5a. (#243)
         val bashSnippet = """# Add to ~/.bashrc  (works inside tmux too)
-__osc133() {
-  if [ -n "${'$'}TMUX" ]; then printf '\ePtmux;\e\e]133;%s\a\e\\' "${'$'}1"
-  else printf '\e]133;%s\a' "${'$'}1"; fi
-}
+__osc133() { if [ -n "${'$'}TMUX" ]; then printf '\ePtmux;\e\e]133;%s\a\e\\' "${'$'}1"; else printf '\e]133;%s\a' "${'$'}1"; fi; }
 PS0='\[${'$'}(__osc133 C)\]'
 PS1='\[${'$'}(__osc133 "D;${'$'}?")${'$'}(__osc133 A)\]'${'$'}PS1'\[${'$'}(__osc133 B)\]'"""
         val zshSnippet = """# Add to ~/.zshrc  (works inside tmux too)
-__osc133() {
-  if [ -n "${'$'}TMUX" ]; then printf '\ePtmux;\e\e]133;%s\a\e\\' "${'$'}1"
-  else printf '\e]133;%s\a' "${'$'}1"; fi
-}
+__osc133() { if [ -n "${'$'}TMUX" ]; then printf '\ePtmux;\e\e]133;%s\a\e\\' "${'$'}1"; else printf '\e]133;%s\a' "${'$'}1"; fi; }
 precmd()  { local r=${'$'}?; __osc133 "D;${'$'}r"; __osc133 A }
 preexec() { __osc133 B; __osc133 C }"""
         val copiedBashMsg = stringResource(R.string.settings_osc133_copied_bash)
