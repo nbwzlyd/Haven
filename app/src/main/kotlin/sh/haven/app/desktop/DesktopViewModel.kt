@@ -415,6 +415,7 @@ class DesktopViewModel @Inject constructor(
                         sessionId = session.sessionId,
                         caption = def.label,
                         fullscreen = def.fullscreen,
+                        scale = scale,
                     )
                     // Preserve the def's own resolution/scale choice (null = use global).
                     preferencesRepository.upsertAppWindowDef(
@@ -498,6 +499,7 @@ class DesktopViewModel @Inject constructor(
                     sessionId = session.sessionId,
                     caption = app.name,
                     fullscreen = fullscreen,
+                    scale = appWindowDefaultScale.value,
                 )
                 preferencesRepository.upsertAppWindowDef(app.name, app.exec, AppWindowOrigin.USER, fullscreen)
             } else {

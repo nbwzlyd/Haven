@@ -4667,6 +4667,7 @@ internal class McpTools(
                 sessionId = session.sessionId,
                 caption = caption ?: "App: $command",
                 fullscreen = fullscreen,
+                scale = scale,
             )
             // Record the launch so the user can restart this window from
             // Desktop settings later. Fire-and-forget — never fail the tool

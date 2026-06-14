@@ -75,6 +75,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalContext
@@ -103,12 +104,38 @@ internal class PresentationHostViewModel @Inject constructor(
     private val desktopManager: DesktopManager,
     private val connectionStore: AppWindowConnectionStore,
     private val pipController: PipController,
+    private val preferencesRepository: sh.haven.core.data.preferences.UserPreferencesRepository,
 ) : ViewModel() {
     val pending: StateFlow<List<PresentedMedia>> = manager.pending
     val minimizedIds: StateFlow<Set<Long>> = manager.minimizedIds
 
     /** Background an app window to an edge icon (keeps the cage + VNC alive). */
     fun minimize(id: Long) = manager.minimize(id)
+
+    /**
+     * Live-adjust a running app window's cage output scale (the 3-finger pinch),
+     * and persist it to the saved app (matched by command, preserving its other
+     * fields) so the scale sticks for next launch.
+     */
+    fun changeAppWindowScale(sessionId: String, scale: Float) {
+        viewModelScope.launch(Dispatchers.IO) {
+            desktopManager.setAppWindowScale(sessionId, scale)
+            desktopManager.appWindows.value[sessionId]?.command?.let { cmd ->
+                runCatching {
+                    val existing = preferencesRepository.appWindowDefs.first()
+                        .items.firstOrNull { it.command == cmd }
+                    preferencesRepository.upsertAppWindowDef(
+                        label = "",
+                        command = cmd,
+                        createdBy = sh.haven.core.data.preferences.AppWindowOrigin.USER,
+                        fullscreen = existing?.fullscreen ?: true,
+                        resolution = null,
+                        scale = scale,
+                    )
+                }
+            }
+        }
+    }
 
     /** Restore a backgrounded app window to the full overlay. */
     fun restore(id: Long) = manager.restore(id)
@@ -249,6 +276,10 @@ internal fun PresentationHost(viewModel: PresentationHostViewModel = hiltViewMod
                             onPictureInPicture = {
                                 viewModel.setActivePipMedia(current)
                                 (context.findActivity() as? MainActivity)?.enterPipForMedia()
+                            },
+                            currentScale = current.scale,
+                            onChangeScale = { s ->
+                                current.sessionId?.let { viewModel.changeAppWindowScale(it, s) }
                             },
                         )
                     } else {
@@ -579,6 +610,8 @@ private fun AppWindowContent(
     onDismiss: () -> Unit,
     onMinimize: () -> Unit,
     onPictureInPicture: () -> Unit,
+    currentScale: Float,
+    onChangeScale: (Float) -> Unit,
 ) {
     if (fullscreen) {
         Dialog(
@@ -599,7 +632,7 @@ private fun AppWindowContent(
                 }
             }
             Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                AppWindowVnc(controller, true, onFullscreenChange, onDismiss, onMinimize, onPictureInPicture)
+                AppWindowVnc(controller, true, onFullscreenChange, onDismiss, onMinimize, onPictureInPicture, currentScale, onChangeScale)
             }
         }
         // The opaque dialog covers this; a stable-height placeholder keeps the
@@ -607,7 +640,7 @@ private fun AppWindowContent(
         Box(modifier = Modifier.fillMaxWidth().height(420.dp))
     } else {
         Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
-            AppWindowVnc(controller, false, onFullscreenChange, onDismiss, onMinimize, onPictureInPicture)
+            AppWindowVnc(controller, false, onFullscreenChange, onDismiss, onMinimize, onPictureInPicture, currentScale, onChangeScale)
         }
     }
 }
@@ -621,6 +654,8 @@ private fun AppWindowVnc(
     onDismiss: () -> Unit,
     onMinimize: () -> Unit,
     onPictureInPicture: () -> Unit,
+    currentScale: Float,
+    onChangeScale: (Float) -> Unit,
 ) {
     VncSessionContent(
         connected = controller.connected,
@@ -651,5 +686,8 @@ private fun AppWindowVnc(
         // host can swap the sheet box ↔ the full-window Dialog above.
         fullscreenOverride = fullscreenOverride,
         onFullscreenChanged = onFullscreenChange,
+        // 3-finger fullscreen pinch → live cage output scale.
+        currentScale = currentScale,
+        onChangeScale = onChangeScale,
     )
 }

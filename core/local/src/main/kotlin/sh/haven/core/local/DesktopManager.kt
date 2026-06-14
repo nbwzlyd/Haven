@@ -777,6 +777,8 @@ class DesktopManager @Inject constructor(
         val vncPort: Int,
         val state: DesktopState,
         val errorMessage: String? = null,
+        /** Current sway output scale (updated live by [setAppWindowScale]). */
+        val scale: Float = 1f,
     )
 
     private val _appWindows = MutableStateFlow<Map<String, AppWindowSession>>(emptyMap())
@@ -837,7 +839,7 @@ class DesktopManager @Inject constructor(
             |""".trimMargin(),
         )
         val compositorCmd = "sway -c /tmp/haven-kiosk-$display.config"
-        var session = AppWindowSession(sessionId, command, display, port, DesktopState.STARTING)
+        var session = AppWindowSession(sessionId, command, display, port, DesktopState.STARTING, scale = scale)
         _appWindows.update { it + (sessionId to session) }
 
         val process = try {
@@ -910,6 +912,32 @@ class DesktopManager @Inject constructor(
         killAppWindowSession(session.displayNumber)
         releaseDisplay(session.displayNumber)
         _appWindows.update { it - sessionId }
+    }
+
+    /**
+     * Live-change a running app window's sway output scale (the 3-finger pinch
+     * gesture). Only the output *scale* changes — the headless `mode`
+     * (framebuffer pixel size) is unchanged, so wayvnc keeps the same size and
+     * the VNC view just re-renders the app bigger/smaller with no reconnect.
+     * No-op if the session isn't known.
+     *
+     * Stale `sway-ipc.*.sock` accumulate under the per-display XDG dir (display
+     * numbers are reused and the launch only cleans `wayland-*`), so the live
+     * socket is found by connect-testing each with `-t get_version`.
+     */
+    suspend fun setAppWindowScale(sessionId: String, scale: Float) {
+        val session = _appWindows.value[sessionId] ?: return
+        val xdg = "/tmp/xdg-runtime-${session.displayNumber}"
+        val s = formatCageScale(scale)
+        val cmd = buildString {
+            append("export XDG_RUNTIME_DIR=$xdg; ")
+            append("for k in $xdg/sway-ipc.*.sock; do ")
+            append("swaymsg -s \"\$k\" -t get_version >/dev/null 2>&1 && { ")
+            append("swaymsg -s \"\$k\" output HEADLESS-1 scale $s >/dev/null 2>&1; break; }; ")
+            append("done")
+        }
+        prootManager.runCommandInProot(cmd)
+        _appWindows.update { it + (sessionId to session.copy(scale = scale)) }
     }
 
     /**

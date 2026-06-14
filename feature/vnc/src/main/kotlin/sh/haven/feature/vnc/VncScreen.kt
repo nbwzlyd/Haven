@@ -176,6 +176,9 @@ fun VncSessionContent(
      * back to the host.
      */
     fullscreenOverride: Boolean? = null,
+    /** App-window fullscreen: 3-finger pinch → live cage output scale. See [VncViewer]. */
+    onChangeScale: ((Float) -> Unit)? = null,
+    currentScale: Float = 1f,
 ) {
     val connectedState by connected.collectAsState()
     val frameState by frame.collectAsState()
@@ -256,6 +259,8 @@ fun VncSessionContent(
             onMinimize = onMinimize,
             onPictureInPicture = onPictureInPicture,
             twoFingerZoom = twoFingerZoom,
+            onChangeScale = onChangeScale,
+            currentScale = currentScale,
         )
     } else {
         VncPlaceholder(
@@ -488,6 +493,13 @@ private fun VncViewer(
      * 3 fingers = local zoom/pan).
      */
     twoFingerZoom: Boolean = false,
+    /**
+     * App-window fullscreen only: a 3-finger pinch adjusts the cage's live
+     * output scale (re-render bigger/smaller) instead of digital zoom-out.
+     * [currentScale] seeds the gesture; [onChangeScale] pushes quantized changes.
+     */
+    onChangeScale: ((Float) -> Unit)? = null,
+    currentScale: Float = 1f,
 ) {
     val orientationMode = OrientationMode.fromActivityValue(currentOrientation)
     val orientationDesc = when (orientationMode) {
@@ -498,6 +510,11 @@ private fun VncViewer(
     // Finger count that switches a multi-touch gesture from remote
     // scroll-wheel to local viewport pinch-zoom + pan.
     val zoomPanMinFingers = if (twoFingerZoom) 2 else 3
+    // App-window fullscreen: cover/crop-fill the screen (no letterbox — phones
+    // have rounded corners so losing a sliver is fine) and floor the digital
+    // zoom at the fill scale so a pinch-out can't expose a black border. The
+    // desktop viewer stays contain so its edges/taskbar aren't cropped.
+    val coverFill = fullscreen && twoFingerZoom
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val imageBitmap = remember(frame) { frame.asImageBitmap() }
     val cursorImage = remember(cursor?.bitmap) { cursor?.bitmap?.asImageBitmap() }
@@ -506,6 +523,10 @@ private fun VncViewer(
     var zoom by remember { mutableFloatStateOf(1f) }
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
+    // 3-finger fullscreen output-scale gesture (app windows): accumulates the
+    // pinch and pushes quantized scale changes to the live cage via onChangeScale.
+    var outputScale by remember { mutableFloatStateOf(currentScale) }
+    var lastSentScale by remember { mutableFloatStateOf(currentScale) }
 
     // Mario-camera viewport pan: when in touchpad mode and zoomed, snap the
     // pan so the cursor always stays inside the inner dead-zone of the view.
@@ -698,7 +719,7 @@ private fun VncViewer(
                                         screenToVnc(
                                             lastSinglePos, viewSize,
                                             frame.width, frame.height,
-                                            zoom, panX, panY,
+                                            zoom, panX, panY, coverFill,
                                         )
                                     }
                                     onLongPress(vx, vy)
@@ -746,12 +767,29 @@ private fun VncViewer(
                                     // totalFingers so lifting a finger
                                     // mid-gesture doesn't re-purpose it.
                                     if (totalFingers >= zoomPanMinFingers) {
+                                      if (coverFill && onChangeScale != null && totalFingers >= 3) {
+                                        // 3-finger fullscreen: adjust the live cage
+                                        // output scale (re-render bigger/smaller),
+                                        // not the pointless local digital zoom-out.
+                                        if (prevSpan > 0f && span > 0f) {
+                                            outputScale = (outputScale * (span / prevSpan)).coerceIn(0.5f, 3f)
+                                            val q = Math.round(outputScale / 0.25f) * 0.25f
+                                            if (q != lastSentScale) {
+                                                lastSentScale = q
+                                                onChangeScale(q)
+                                            }
+                                        }
+                                      } else {
                                         if (prevSpan > 0f && span > 0f) {
                                             val requestedScale = span / prevSpan
                                             // Max 10× (was 5×): small portrait
                                             // phones need to magnify far enough
                                             // to read remote-desktop text.
-                                            val newZoom = (zoom * requestedScale).coerceIn(0.5f, 10f)
+                                            // Cover-fill floors zoom at 1× (the
+                                            // fill scale) so a pinch-out can't
+                                            // expose black; otherwise 0.5× min.
+                                            val newZoom = (zoom * requestedScale)
+                                                .coerceIn(if (coverFill) 1f else 0.5f, 10f)
                                             // Keep the content point under the pinch
                                             // centroid stationary during the zoom.
                                             // graphicsLayer's default TransformOrigin
@@ -782,7 +820,10 @@ private fun VncViewer(
                                         // the desktop viewer keeps free pan +
                                         // its touchpad mario-camera behaviour.
                                         if (twoFingerZoom && viewSize.width > 0 && viewSize.height > 0) {
-                                            val fit = minOf(
+                                            val fit = if (coverFill) maxOf(
+                                                viewSize.width.toFloat() / frame.width,
+                                                viewSize.height.toFloat() / frame.height,
+                                            ) else minOf(
                                                 viewSize.width.toFloat() / frame.width,
                                                 viewSize.height.toFloat() / frame.height,
                                             )
@@ -791,6 +832,7 @@ private fun VncViewer(
                                             panX = panX.coerceIn(-maxPanX, maxPanX)
                                             panY = panY.coerceIn(-maxPanY, maxPanY)
                                         }
+                                      }
                                     } else {
                                         cumulativeScrollY += centroid.y - prevCentroid.y
                                         if (abs(cumulativeScrollY) > 40f) {
@@ -850,7 +892,7 @@ private fun VncViewer(
                                     val pos = screenToVnc(
                                         change.position, viewSize,
                                         frame.width, frame.height,
-                                        zoom, panX, panY,
+                                        zoom, panX, panY, coverFill,
                                     )
                                     when {
                                         // Held toolbar button: move only (no
@@ -897,7 +939,7 @@ private fun VncViewer(
                                 screenToVnc(
                                     lastSinglePos, viewSize,
                                     frame.width, frame.height,
-                                    zoom, panX, panY,
+                                    zoom, panX, panY, coverFill,
                                 )
                             }
                             onTap(vx, vy)
@@ -932,7 +974,7 @@ private fun VncViewer(
                         clip = true
                     },
             ) {
-                drawVncFrame(imageBitmap, frame.width, frame.height)
+                drawVncFrame(imageBitmap, frame.width, frame.height, coverFill)
                 if (cursorImage != null && cursor != null) {
                     drawVncCursor(
                         cursor = cursorImage,
@@ -944,6 +986,7 @@ private fun VncViewer(
                         pointerY = pointerPos.second,
                         fbWidth = frame.width,
                         fbHeight = frame.height,
+                        coverFill = coverFill,
                     )
                 }
             }
@@ -1236,10 +1279,13 @@ private fun DrawScope.drawVncFrame(
     image: androidx.compose.ui.graphics.ImageBitmap,
     srcWidth: Int,
     srcHeight: Int,
+    coverFill: Boolean = false,
 ) {
     val viewW = size.width
     val viewH = size.height
-    val scale = minOf(viewW / srcWidth, viewH / srcHeight)
+    // contain (letterbox) by default; cover (crop-fill) for app-window fullscreen.
+    val scale = if (coverFill) maxOf(viewW / srcWidth, viewH / srcHeight)
+    else minOf(viewW / srcWidth, viewH / srcHeight)
     val dstW = srcWidth * scale
     val dstH = srcHeight * scale
     val offsetX = (viewW - dstW) / 2
@@ -1264,10 +1310,12 @@ private fun DrawScope.drawVncCursor(
     pointerY: Int,
     fbWidth: Int,
     fbHeight: Int,
+    coverFill: Boolean = false,
 ) {
     val viewW = size.width
     val viewH = size.height
-    val scale = minOf(viewW / fbWidth, viewH / fbHeight)
+    val scale = if (coverFill) maxOf(viewW / fbWidth, viewH / fbHeight)
+    else minOf(viewW / fbWidth, viewH / fbHeight)
     val fbOffsetX = (viewW - fbWidth * scale) / 2
     val fbOffsetY = (viewH - fbHeight * scale) / 2
 
@@ -1352,6 +1400,7 @@ private fun screenToVnc(
     zoom: Float,
     panX: Float,
     panY: Float,
+    coverFill: Boolean = false,
 ): Pair<Int, Int> {
     if (viewSize.width == 0 || viewSize.height == 0) return 0 to 0
     val viewW = viewSize.width.toFloat()
@@ -1365,7 +1414,8 @@ private fun screenToVnc(
     val localY = (offset.y - cy - panY) / zoom + cy
 
     // Now map from view coordinates to VNC coordinates (same as before)
-    val fitScale = minOf(viewW / fbWidth, viewH / fbHeight)
+    val fitScale = if (coverFill) maxOf(viewW / fbWidth, viewH / fbHeight)
+    else minOf(viewW / fbWidth, viewH / fbHeight)
     val dstW = fbWidth * fitScale
     val dstH = fbHeight * fitScale
     val offsetX = (viewW - dstW) / 2

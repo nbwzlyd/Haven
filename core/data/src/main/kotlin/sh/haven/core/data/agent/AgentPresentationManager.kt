@@ -54,6 +54,8 @@ data class PresentedMedia(
     val sessionId: String? = null,
     /** APP_WINDOW: open filling the whole screen (escaping the sheet) instead of the 420dp box. */
     val fullscreen: Boolean = false,
+    /** APP_WINDOW: the cage output scale this window launched at (seeds the 3-finger scale gesture). */
+    val scale: Float = 1f,
     val presentedAt: Long = System.currentTimeMillis(),
 )
 
@@ -158,6 +160,7 @@ class AgentPresentationManager @Inject constructor() {
         sessionId: String,
         caption: String?,
         fullscreen: Boolean = false,
+        scale: Float = 1f,
     ): Long {
         // Auto-background the currently-focused app window so the new one takes
         // the single full-overlay slot; the previous one becomes an edge icon.
@@ -171,6 +174,7 @@ class AgentPresentationManager @Inject constructor() {
                 port = port,
                 sessionId = sessionId,
                 fullscreen = fullscreen,
+                scale = scale,
             ),
         )
     }
