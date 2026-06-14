@@ -7,6 +7,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
@@ -104,6 +106,8 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -120,7 +124,9 @@ import sh.haven.core.data.preferences.ToolbarLayout
 import sh.haven.core.ui.CursorOverlay
 import sh.haven.feature.vnc.R
 import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.layout.offset
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Stateless VNC session content — takes StateFlows and input lambdas directly.
@@ -600,6 +606,16 @@ private fun VncViewer(
     // Fullscreen overlay toolbar
     var overlayVisible by remember { mutableStateOf(false) }
     var showGestureHelp by remember { mutableStateOf(false) }
+    // Draggable fullscreen menu button: offset from the top-right corner
+    // (x grows left/negative, y grows down). Survives rotation/recompose.
+    var menuOffX by rememberSaveable { mutableStateOf(0f) }
+    var menuOffY by rememberSaveable { mutableStateOf(0f) }
+    var rootBoxSize by remember { mutableStateOf(IntSize.Zero) }
+    // Measured sizes so the opened toolbar can grow UP when the button sits in
+    // the lower half (otherwise its downward column runs off the screen bottom).
+    var menuBtnH by remember { mutableStateOf(0) }
+    var menuToolbarH by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
 
     // Explicit mouse-button hold (#183): when non-null (1=L, 2=M, 3=R) that
     // button is held down on the remote, so finger movement drags with it
@@ -657,7 +673,7 @@ private fun VncViewer(
         mutableStateOf(TextFieldValue(sentinel, TextRange(sentinel.length)))
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().onSizeChanged { rootBoxSize = it }) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Bandwidth-suggestion banner (#107 follow-up). Non-blocking; user
         // chooses Switch (clean reconnect at 256 colours) or Dismiss.
@@ -1220,17 +1236,35 @@ private fun VncViewer(
             )
         }
 
-        // Corner hotspot — top-right (visible when overlay is hidden)
+        // Corner hotspot — defaults to top-right; drag to reposition.
         AnimatedVisibility(
             visible = !overlayVisible,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopEnd),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset { IntOffset(menuOffX.roundToInt(), menuOffY.roundToInt()) },
         ) {
+            val btnPx = with(density) { 48.dp.toPx() }
             Surface(
-                onClick = { overlayVisible = true },
-                shape = RoundedCornerShape(bottomStart = 12.dp),
+                shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.4f),
+                modifier = Modifier
+                    .onSizeChanged { menuBtnH = it.height }
+                    // Tap opens the toolbar; drag moves the button out of the
+                    // app's way (clamped to the viewport so it can't be lost).
+                    .pointerInput(Unit) {
+                        detectTapGestures { overlayVisible = true }
+                    }
+                    .pointerInput(rootBoxSize) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            val minX = -(rootBoxSize.width - btnPx).coerceAtLeast(0f)
+                            val maxY = (rootBoxSize.height - btnPx).coerceAtLeast(0f)
+                            menuOffX = (menuOffX + drag.x).coerceIn(minX, 0f)
+                            menuOffY = (menuOffY + drag.y).coerceIn(0f, maxY)
+                        }
+                    },
             ) {
                 Icon(
                     Icons.Default.Menu,
@@ -1241,15 +1275,30 @@ private fun VncViewer(
             }
         }
 
-        // Floating toolbar overlay — rendered last so it's on top of the dismiss scrim
+        // Floating toolbar overlay — rendered last so it's on top of the dismiss
+        // scrim; follows the (draggable) menu button's position. When the button
+        // is in the lower half the column would run off the bottom, so anchor the
+        // toolbar's BOTTOM to the button and grow upward instead.
         AnimatedVisibility(
             visible = overlayVisible,
             enter = fadeIn(),
             exit = fadeOut(),
-            modifier = Modifier.align(Alignment.TopEnd),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .onSizeChanged { menuToolbarH = it.height }
+                .offset {
+                    val invert = rootBoxSize.height > 0 &&
+                        (menuOffY + menuBtnH / 2f) > rootBoxSize.height / 2f
+                    val ty = if (invert) {
+                        (menuOffY + menuBtnH - menuToolbarH).coerceAtLeast(0f)
+                    } else {
+                        menuOffY
+                    }
+                    IntOffset(menuOffX.roundToInt(), ty.roundToInt())
+                },
         ) {
             Surface(
-                shape = RoundedCornerShape(bottomStart = 16.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
                 shadowElevation = 8.dp,
             ) {
