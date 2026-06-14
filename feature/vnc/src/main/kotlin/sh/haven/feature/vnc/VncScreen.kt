@@ -168,6 +168,14 @@ fun VncSessionContent(
     onPictureInPicture: (() -> Unit)? = null,
     /** See [VncViewer]: 2-finger pinch-zoom for single-app windows. */
     twoFingerZoom: Boolean = false,
+    /**
+     * App-window-only: when non-null, fullscreen is host-controlled (the host
+     * promotes the window into a full-screen Dialog that escapes the bottom
+     * sheet). The desktop viewer leaves this null and keeps its own internal
+     * fullscreen state. [onFullscreenChanged] is then the toggle-request channel
+     * back to the host.
+     */
+    fullscreenOverride: Boolean? = null,
 ) {
     val connectedState by connected.collectAsState()
     val frameState by frame.collectAsState()
@@ -175,11 +183,17 @@ fun VncSessionContent(
     val cursorState = cursor?.collectAsState()?.value
     val pointerState = pointerPos?.collectAsState()?.value ?: (0 to 0)
 
-    var fullscreen by rememberSaveable { mutableStateOf(false) }
+    // Fullscreen is normally self-managed (the desktop viewer). When a caller
+    // passes [fullscreenOverride] (the app-window case) the host owns the state
+    // and the immersive window — VncSessionContent only mirrors it and routes
+    // toggle requests up via [onFullscreenChanged].
+    var localFullscreen by rememberSaveable { mutableStateOf(false) }
+    val fullscreen = fullscreenOverride ?: localFullscreen
     val view = LocalView.current
     val window = (view.context as? android.app.Activity)?.window
 
     LaunchedEffect(fullscreen) {
+        if (fullscreenOverride != null) return@LaunchedEffect
         onFullscreenChanged(fullscreen)
         if (window != null) {
             val controller = WindowCompat.getInsetsController(window, view)
@@ -194,12 +208,12 @@ fun VncSessionContent(
     }
 
     LaunchedEffect(connectedState) {
-        if (!connectedState && fullscreen) fullscreen = false
+        if (!connectedState && fullscreenOverride == null && localFullscreen) localFullscreen = false
     }
 
     DisposableEffect(Unit) {
         onDispose {
-            if (fullscreen && window != null) {
+            if (fullscreenOverride == null && fullscreen && window != null) {
                 val controller = WindowCompat.getInsetsController(window, view)
                 controller.show(WindowInsetsCompat.Type.systemBars())
                 onFullscreenChanged(false)
@@ -225,7 +239,10 @@ fun VncSessionContent(
             onTypeText = onTypeText,
             onKeyDown = onKeyDown,
             onKeyUp = onKeyUp,
-            onToggleFullscreen = { fullscreen = !fullscreen },
+            onToggleFullscreen = {
+                if (fullscreenOverride != null) onFullscreenChanged(!fullscreen)
+                else localFullscreen = !localFullscreen
+            },
             onDisconnect = onDisconnect,
             cursor = cursorState,
             pointerPos = pointerState,

@@ -125,6 +125,9 @@ class McpToolsConsentTest {
             // channel and the result is deliberately user-visible — same
             // shape as present_media: agent→user surface, no prompt.
             "raise_notification",
+            // Enumerating installed guest apps reads .desktop files; no
+            // secrets, no side effects — read-only, no prompt.
+            "list_guest_apps",
         )) {
             val c = tools.consentFor(name)
                 ?: error("$name not registered")

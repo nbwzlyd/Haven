@@ -1043,6 +1043,7 @@ class UserPreferencesRepository @Inject constructor(
         label: String,
         command: String,
         createdBy: AppWindowOrigin,
+        fullscreen: Boolean = false,
     ) {
         dataStore.edit { prefs ->
             val current = prefs[appWindowDefsKey]?.let { AppWindowDefList.fromJson(it) }
@@ -1051,7 +1052,7 @@ class UserPreferencesRepository @Inject constructor(
             val items = if (current.items.any { it.command == command }) {
                 current.items.map {
                     if (it.command == command) {
-                        it.copy(lastUsed = now, label = label.ifBlank { it.label })
+                        it.copy(lastUsed = now, label = label.ifBlank { it.label }, fullscreen = fullscreen)
                     } else it
                 }
             } else {
@@ -1060,6 +1061,7 @@ class UserPreferencesRepository @Inject constructor(
                     command = command,
                     createdBy = createdBy,
                     lastUsed = now,
+                    fullscreen = fullscreen,
                 )
             }
             prefs[appWindowDefsKey] = AppWindowDefList(items).toJson()
@@ -1082,7 +1084,12 @@ class UserPreferencesRepository @Inject constructor(
      * entry's [AppWindowOrigin] is preserved; [lastUsed] is refreshed. No-op
      * if no entry has that id.
      */
-    suspend fun updateAppWindowDef(id: String, label: String, command: String) {
+    suspend fun updateAppWindowDef(
+        id: String,
+        label: String,
+        command: String,
+        fullscreen: Boolean? = null,
+    ) {
         dataStore.edit { prefs ->
             val current = prefs[appWindowDefsKey]?.let { AppWindowDefList.fromJson(it) }
                 ?: AppWindowDefList.EMPTY
@@ -1093,6 +1100,7 @@ class UserPreferencesRepository @Inject constructor(
                         label = label.ifBlank { command },
                         command = command,
                         lastUsed = now,
+                        fullscreen = fullscreen ?: it.fullscreen,
                     )
                 } else it
             }

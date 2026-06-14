@@ -27,6 +27,8 @@ data class AppWindowDef(
     val command: String,
     val createdBy: AppWindowOrigin = AppWindowOrigin.USER,
     val lastUsed: Long = System.currentTimeMillis(),
+    /** Open the window filling the whole screen instead of the bottom sheet. */
+    val fullscreen: Boolean = false,
 )
 
 /** Persisted ordered list of [AppWindowDef], JSON-encoded into DataStore. */
@@ -42,6 +44,7 @@ data class AppWindowDefList(val items: List<AppWindowDef>) {
                     put("command", d.command)
                     put("createdBy", d.createdBy.id)
                     put("lastUsed", d.lastUsed)
+                    put("fullscreen", d.fullscreen)
                 },
             )
         }
@@ -63,6 +66,7 @@ data class AppWindowDefList(val items: List<AppWindowDef>) {
                     command = command,
                     createdBy = AppWindowOrigin.fromId(o.optString("createdBy", "user")),
                     lastUsed = o.optLong("lastUsed", 0L),
+                    fullscreen = o.optBoolean("fullscreen", false),
                 )
             }
             AppWindowDefList(items)

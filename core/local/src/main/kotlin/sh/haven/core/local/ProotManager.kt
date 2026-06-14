@@ -204,6 +204,15 @@ class ProotManager @Inject constructor(
         get() = rootfsDirFor(activeDistroId)
 
     /**
+     * Host dir for rasterized guest app icons. cacheDir is bound into the guest
+     * at `/tmp` (see the proot `--bind` below), so a PNG written here by an
+     * in-guest rasterizer is also readable app-side off disk. Used by
+     * [GuestAppScanner] to turn SVG `.desktop` icons into decodable PNGs.
+     */
+    val iconCacheDir: File
+        get() = File(context.cacheDir, "guest-app-icons")
+
+    /**
      * Back-compat alias for [activeRootfsDir]. Kept for callers
      * that have not yet migrated to the distro-aware API.
      */

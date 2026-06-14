@@ -57,4 +57,14 @@ class AppWindowDefListTest {
         val json = """[{"command":"imv x","createdBy":"martian"}]"""
         assertEquals(AppWindowOrigin.USER, AppWindowDefList.fromJson(json).items[0].createdBy)
     }
+
+    @Test
+    fun fullscreenFlagRoundTripsAndDefaultsFalseForOldJson() {
+        val list = AppWindowDefList(
+            listOf(AppWindowDef(id = "id-1", label = "GIMP", command = "gimp", fullscreen = true)),
+        )
+        assertTrue(AppWindowDefList.fromJson(list.toJson()).items[0].fullscreen)
+        // Pre-fullscreen JSON has no field → defaults false.
+        assertEquals(false, AppWindowDefList.fromJson("""[{"command":"gimp"}]""").items[0].fullscreen)
+    }
 }

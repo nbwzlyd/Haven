@@ -58,6 +58,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 import sh.haven.core.local.DesktopManager
@@ -101,8 +103,11 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
     var showAddAppDialog by remember { mutableStateOf(false) }
     // Non-null while the edit dialog is open, holding the def being edited.
     var editingApp by remember { mutableStateOf<AppWindowDef?>(null) }
+    var showInstalledApps by remember { mutableStateOf(false) }
     val appWindowDefs by viewModel.appWindowDefs.collectAsState()
     val launchingIds by viewModel.launchingIds.collectAsState()
+    val installedApps by viewModel.installedApps.collectAsState()
+    val scanningApps by viewModel.scanningApps.collectAsState()
 
     Column(
         modifier = Modifier
@@ -137,7 +142,23 @@ fun DesktopManagerScreen(viewModel: DesktopViewModel = hiltViewModel()) {
             onEdit = { editingApp = it },
             onDelete = { viewModel.deleteAppWindow(it.id) },
             onAdd = { showAddAppDialog = true },
+            onBrowse = { showInstalledApps = true },
         )
+    }
+
+    if (showInstalledApps) {
+        androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshInstalledApps() }
+        Dialog(
+            onDismissRequest = { showInstalledApps = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            InstalledAppsScreen(
+                result = installedApps,
+                scanning = scanningApps,
+                onLaunch = { app, fullscreen -> viewModel.launchInstalledApp(app, fullscreen) },
+                onClose = { showInstalledApps = false },
+            )
+        }
     }
 
     if (showAddAppDialog) {
@@ -201,6 +222,7 @@ private fun AppWindowsSection(
     onEdit: (AppWindowDef) -> Unit,
     onDelete: (AppWindowDef) -> Unit,
     onAdd: () -> Unit,
+    onBrowse: () -> Unit,
 ) {
     Card(
         modifier = Modifier
@@ -268,7 +290,11 @@ private fun AppWindowsSection(
                 }
             }
             Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onAdd) { Text(stringResource(AppR.string.app_desktop_add_app_window)) }
+            Row {
+                TextButton(onClick = onBrowse) { Text(stringResource(AppR.string.app_desktop_browse_installed_apps)) }
+                Spacer(Modifier.width(8.dp))
+                TextButton(onClick = onAdd) { Text(stringResource(AppR.string.app_desktop_add_app_window)) }
+            }
         }
     }
 }

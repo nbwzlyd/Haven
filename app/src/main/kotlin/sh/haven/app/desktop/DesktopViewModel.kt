@@ -33,7 +33,10 @@ import sh.haven.core.data.repository.ConnectionRepository
 import sh.haven.core.et.EtSessionManager
 import sh.haven.core.knock.KnockSequence
 import sh.haven.core.knock.PortKnocker
+import sh.haven.core.local.AppScanResult
 import sh.haven.core.local.DesktopManager
+import sh.haven.core.local.GuestAppScanner
+import sh.haven.core.local.InstalledApp
 import sh.haven.core.local.LocalSessionManager
 import sh.haven.core.local.ProotManager
 import sh.haven.core.local.proot.Distro
@@ -393,8 +396,9 @@ class DesktopViewModel @Inject constructor(
                         port = session.vncPort,
                         sessionId = session.sessionId,
                         caption = def.label,
+                        fullscreen = def.fullscreen,
                     )
-                    preferencesRepository.upsertAppWindowDef(def.label, def.command, def.createdBy)
+                    preferencesRepository.upsertAppWindowDef(def.label, def.command, def.createdBy, def.fullscreen)
                 } else {
                     _userMessages.emit(
                         "Couldn't launch ${def.label}: ${session.errorMessage ?: "failed to start"}",
@@ -418,6 +422,54 @@ class DesktopViewModel @Inject constructor(
 
     fun updateAppWindow(id: String, label: String, command: String) {
         viewModelScope.launch { preferencesRepository.updateAppWindowDef(id, label, command) }
+    }
+
+    // --- Installed-app launcher ("Browse installed apps", xfce4-style menu) ---
+
+    private val _installedApps = MutableStateFlow<AppScanResult?>(null)
+    /** Discovered guest GUI apps; null until [refreshInstalledApps] completes. */
+    val installedApps: StateFlow<AppScanResult?> = _installedApps.asStateFlow()
+
+    private val _scanningApps = MutableStateFlow(false)
+    val scanningApps: StateFlow<Boolean> = _scanningApps.asStateFlow()
+
+    /** Scan the active guest's `.desktop` catalog. Idempotent; safe to re-call. */
+    fun refreshInstalledApps() {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!prootManager.isRootfsInstalled) {
+                _installedApps.value = AppScanResult(emptyList(), 0, 0)
+                return@launch
+            }
+            _scanningApps.value = true
+            try {
+                _installedApps.value = GuestAppScanner(prootManager).scan()
+            } catch (e: Exception) {
+                Log.w(TAG, "installed-app scan failed", e)
+                _userMessages.emit("Couldn't scan installed apps: ${e.message}")
+                _installedApps.value = AppScanResult(emptyList(), 0, 0)
+            } finally {
+                _scanningApps.value = false
+            }
+        }
+    }
+
+    /** Launch a discovered app in a cage window, recording it as a saved def. */
+    fun launchInstalledApp(app: InstalledApp, fullscreen: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = desktopManager.startAppWindow(app.exec)
+            if (session.state == DesktopManager.DesktopState.RUNNING) {
+                presentationManager.presentAppWindow(
+                    host = "127.0.0.1",
+                    port = session.vncPort,
+                    sessionId = session.sessionId,
+                    caption = app.name,
+                    fullscreen = fullscreen,
+                )
+                preferencesRepository.upsertAppWindowDef(app.name, app.exec, AppWindowOrigin.USER, fullscreen)
+            } else {
+                _userMessages.emit("Couldn't launch ${app.name}: ${session.errorMessage ?: "failed to start"}")
+            }
+        }
     }
 
     /**

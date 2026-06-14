@@ -838,6 +838,10 @@ internal class McpTools(
                         put("type", "string")
                         put("description", "Optional one-line caption shown above the window.")
                     })
+                    put("fullscreen", JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Open the window filling the whole screen (immersive) instead of the bottom sheet. Default false.")
+                    })
                 })
                 put("required", JSONArray().put("command"))
             },
@@ -846,6 +850,15 @@ internal class McpTools(
                 "Launch a GUI app window for the agent: ${args.optString("command")}"
             },
         ) { args -> presentApp(args) },
+
+        "list_guest_apps" to ToolHandler(
+            description = "List the GUI applications installed in the active proot guest, discovered from its `.desktop` files (the same source an xfce4 application menu reads). Use this to find an app to launch with `present_app` without knowing its exact command. Returns { count, iconsResolved, apps:[{ name, exec, hasIcon, categories }] } sorted by name; `exec` is the runnable guest command (field codes stripped) you pass straight to present_app's `command`. `hasIcon` indicates whether a decodable icon was resolved (icons themselves stay on-device for the launcher UI). Skips NoDisplay/Terminal/non-application entries.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject())
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { listGuestApps() },
 
         "raise_notification" to ToolHandler(
             description = "Post a real Android system notification on Haven's behalf so the agent can drive notification-listener / wake / DND / silencer apps during F-Droid tester reviews without needing a second device. Always posts to the dedicated 'agent.test.notifications' channel (created on first use) so the user can mute agent notifications cleanly without affecting Haven's own connection / renewal notifications. Returns { posted, id, channel } — keep the id around if you want to dismiss or replace the notification later (a future tool). Notifications use Haven's app identity, so notification-listener apps see package=sh.haven.app. Requires the POST_NOTIFICATIONS runtime grant (declared in the manifest, granted by the user on first Haven launch); the call fails with a clear error if notifications have been disabled in system settings.",
@@ -4628,6 +4641,7 @@ internal class McpTools(
             throw McpError(-32602, "command is required (the GUI app to run, e.g. 'imv /root/x.png')")
         }
         val caption = args.optString("caption", "").ifEmpty { null }
+        val fullscreen = args.optBoolean("fullscreen", false)
         if (!prootManager.isRootfsInstalled) {
             throw McpError(-32603, "Active distro '${prootManager.activeDistroId}' has no installed rootfs")
         }
@@ -4639,6 +4653,7 @@ internal class McpTools(
                 port = session.vncPort,
                 sessionId = session.sessionId,
                 caption = caption ?: "App: $command",
+                fullscreen = fullscreen,
             )
             // Record the launch so the user can restart this window from
             // Desktop settings later. Fire-and-forget — never fail the tool
@@ -4648,6 +4663,7 @@ internal class McpTools(
                     label = caption ?: command,
                     command = command,
                     createdBy = sh.haven.core.data.preferences.AppWindowOrigin.AGENT,
+                    fullscreen = fullscreen,
                 )
             }
             return JSONObject().apply {
@@ -4671,6 +4687,35 @@ internal class McpTools(
                 if (!logTail.isNullOrBlank()) append(" Compositor log: ").append(logTail)
             },
         )
+    }
+
+    /**
+     * Enumerate installed GUI apps in the active guest (the launcher catalog the
+     * Browse-installed-apps menu shows). Reads `.desktop` files off the rootfs
+     * and resolves icons via [sh.haven.core.local.GuestAppScanner]; returns a
+     * lightweight JSON view (icon bytes stay on-device).
+     */
+    private suspend fun listGuestApps(): JSONObject {
+        if (!prootManager.isRootfsInstalled) {
+            throw McpError(-32603, "Active distro '${prootManager.activeDistroId}' has no installed rootfs")
+        }
+        val result = withContext(Dispatchers.IO) {
+            sh.haven.core.local.GuestAppScanner(prootManager).scan()
+        }
+        return JSONObject().apply {
+            put("count", result.total)
+            put("iconsResolved", result.iconsResolved)
+            put("apps", JSONArray().apply {
+                result.apps.forEach { app ->
+                    put(JSONObject().apply {
+                        put("name", app.name)
+                        put("exec", app.exec)
+                        put("hasIcon", app.iconPath != null)
+                        put("categories", JSONArray().apply { app.categories.forEach { put(it) } })
+                    })
+                }
+            })
+        }
     }
 
     /**

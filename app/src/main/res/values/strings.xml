@@ -98,6 +98,18 @@
     <string name="app_desktop_app_window_command_label">Command</string>
     <string name="app_desktop_app_window_command_placeholder">e.g. imv /root/board.png</string>
 
+    <!-- Desktop manager: installed-apps launcher (xfce4-style menu) -->
+    <string name="app_desktop_browse_installed_apps">Browse installed apps</string>
+    <string name="app_desktop_installed_apps_title">Installed apps</string>
+    <string name="app_desktop_installed_apps_search">Search apps</string>
+    <string name="app_desktop_installed_apps_count">%1$d apps · %2$d with icons</string>
+    <string name="app_desktop_installed_apps_empty">No GUI applications found in the active distro.</string>
+    <string name="app_desktop_installed_apps_close_cd">Close</string>
+    <string name="app_desktop_installed_app_icon_cd">%1$s icon</string>
+    <string name="app_desktop_installed_app_launch_cd">Launch %1$s</string>
+    <string name="app_desktop_installed_app_fullscreen_on_cd">%1$s opens fullscreen — tap for windowed</string>
+    <string name="app_desktop_installed_app_fullscreen_off_cd">%1$s opens windowed — tap for fullscreen</string>
+
     <!-- Desktop manager: distro / rootfs -->
     <string name="app_desktop_open_shell_cd">Open shell in %1$s</string>
     <string name="app_desktop_delete_distro_cd">Delete %1$s</string>

@@ -13,11 +13,13 @@ import android.view.MotionEvent
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -46,19 +48,28 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -216,8 +227,18 @@ internal fun PresentationHost(viewModel: PresentationHostViewModel = hiltViewMod
                     val controller = viewModel.controllerFor(current)
                     if (controller != null) {
                         val context = LocalContext.current
+                        // Host owns the fullscreen state for app windows so it can
+                        // promote the window into a full-window Dialog (the 420dp
+                        // sheet box can't grow). Seeds from the per-app flag; the
+                        // id key resets it per presented window but not when the
+                        // composable merely re-parents sheet↔Dialog.
+                        var appFullscreen by rememberSaveable(current.id) {
+                            mutableStateOf(current.fullscreen)
+                        }
                         AppWindowContent(
                             controller = controller,
+                            fullscreen = appFullscreen,
+                            onFullscreenChange = { appFullscreen = it },
                             // Close (in the viewer's own toolbar) tears the cage
                             // down; minimize backgrounds it to an edge icon
                             // (keeps it alive); PiP enters system PiP. All three
@@ -541,47 +562,94 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
  * already does pinch-zoom / pan / drag / fullscreen) bound to a
  * store-owned [AppWindowVncController] connected to the cage-kiosk wayvnc.
  * The controller lifecycle is the PresentedMedia (via [AppWindowConnectionStore]),
- * not this composable — so it survives an overlay→PiP→overlay round-trip.
- * Constrained to a fixed height in the sheet; the viewer's own fullscreen
- * toggle promotes it. [onDismiss] tears the window down.
+ * not this composable — so it survives an overlay→PiP→overlay round-trip and the
+ * sheet↔Dialog re-parent below.
+ *
+ * Not [fullscreen]: rendered in the fixed-height sheet box. [fullscreen]: the
+ * 420dp box can't grow, so the window is promoted into a full-window [Dialog]
+ * that escapes the bottom sheet (immersive, edge-to-edge). The in-viewer
+ * fullscreen toggle, back-press and swipe all flip [onFullscreenChange].
+ * [onDismiss] tears the window down.
  */
 @Composable
 private fun AppWindowContent(
     controller: AppWindowVncController,
+    fullscreen: Boolean,
+    onFullscreenChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onMinimize: () -> Unit,
     onPictureInPicture: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(420.dp),
-    ) {
-        VncSessionContent(
-            connected = controller.connected,
-            frame = controller.frame,
-            error = controller.error,
-            onTap = { x, y -> controller.click(x, y, 1) },
-            onLongPress = { x, y -> controller.click(x, y, 3) },
-            onDragStart = { x, y -> controller.dragStart(x, y) },
-            onDrag = { x, y -> controller.drag(x, y) },
-            onDragEnd = { controller.dragEnd() },
-            onScrollUp = { controller.scroll(true) },
-            onScrollDown = { controller.scroll(false) },
-            onPressButton = { btn -> controller.pressButton(btn) },
-            onReleaseButton = { btn -> controller.releaseButton(btn) },
-            onTypeChar = { c -> controller.typeText(c.toString()) },
-            onTypeText = { s -> controller.typeText(s) },
-            onKeyDown = { sym -> controller.key(sym, true) },
-            onKeyUp = { sym -> controller.key(sym, false) },
-            onDisconnect = onDismiss,
-            // The viewer's own toolbar gains a minimize + PiP button for app
-            // windows (null for full desktops, which don't show them).
-            onMinimize = onMinimize,
-            onPictureInPicture = onPictureInPicture,
-            // App windows expect ordinary 2-finger pinch-to-zoom (the desktop
-            // viewer reserves 2 fingers for remote scroll, zoom on 3).
-            twoFingerZoom = true,
-        )
+    if (fullscreen) {
+        Dialog(
+            onDismissRequest = { onFullscreenChange(false) },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                decorFitsSystemWindows = false,
+                dismissOnBackPress = true,
+            ),
+        ) {
+            // Hide the dialog window's system bars for a true immersive view.
+            val dialogView = LocalView.current
+            LaunchedEffect(dialogView) {
+                val w = (dialogView.parent as? DialogWindowProvider)?.window ?: return@LaunchedEffect
+                WindowCompat.getInsetsController(w, dialogView).apply {
+                    hide(WindowInsetsCompat.Type.systemBars())
+                    systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            }
+            Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+                AppWindowVnc(controller, true, onFullscreenChange, onDismiss, onMinimize, onPictureInPicture)
+            }
+        }
+        // The opaque dialog covers this; a stable-height placeholder keeps the
+        // sheet from animating its height while fullscreen is up.
+        Box(modifier = Modifier.fillMaxWidth().height(420.dp))
+    } else {
+        Box(modifier = Modifier.fillMaxWidth().height(420.dp)) {
+            AppWindowVnc(controller, false, onFullscreenChange, onDismiss, onMinimize, onPictureInPicture)
+        }
     }
+}
+
+/** The shared [VncSessionContent] wiring for an app window, in either container. */
+@Composable
+private fun AppWindowVnc(
+    controller: AppWindowVncController,
+    fullscreenOverride: Boolean,
+    onFullscreenChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onMinimize: () -> Unit,
+    onPictureInPicture: () -> Unit,
+) {
+    VncSessionContent(
+        connected = controller.connected,
+        frame = controller.frame,
+        error = controller.error,
+        onTap = { x, y -> controller.click(x, y, 1) },
+        onLongPress = { x, y -> controller.click(x, y, 3) },
+        onDragStart = { x, y -> controller.dragStart(x, y) },
+        onDrag = { x, y -> controller.drag(x, y) },
+        onDragEnd = { controller.dragEnd() },
+        onScrollUp = { controller.scroll(true) },
+        onScrollDown = { controller.scroll(false) },
+        onPressButton = { btn -> controller.pressButton(btn) },
+        onReleaseButton = { btn -> controller.releaseButton(btn) },
+        onTypeChar = { c -> controller.typeText(c.toString()) },
+        onTypeText = { s -> controller.typeText(s) },
+        onKeyDown = { sym -> controller.key(sym, true) },
+        onKeyUp = { sym -> controller.key(sym, false) },
+        onDisconnect = onDismiss,
+        // The viewer's own toolbar gains a minimize + PiP button for app
+        // windows (null for full desktops, which don't show them).
+        onMinimize = onMinimize,
+        onPictureInPicture = onPictureInPicture,
+        // App windows expect ordinary 2-finger pinch-to-zoom (the desktop
+        // viewer reserves 2 fingers for remote scroll, zoom on 3).
+        twoFingerZoom = true,
+        // Host-controlled fullscreen: the toggle/exit/back routes here so the
+        // host can swap the sheet box ↔ the full-window Dialog above.
+        fullscreenOverride = fullscreenOverride,
+        onFullscreenChanged = onFullscreenChange,
+    )
 }
