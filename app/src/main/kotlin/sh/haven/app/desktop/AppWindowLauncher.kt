@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import sh.haven.core.data.agent.AgentPresentationManager
+import sh.haven.core.data.message.UserMessage
+import sh.haven.core.data.message.UserMessageBus
 import sh.haven.core.data.preferences.AppWindowDef
 import sh.haven.core.data.preferences.UserPreferencesRepository
 import sh.haven.core.local.DesktopManager
@@ -26,6 +28,7 @@ class AppWindowLauncher @Inject constructor(
     private val preferencesRepository: UserPreferencesRepository,
     localSessionManager: LocalSessionManager,
     private val presentationManager: AgentPresentationManager,
+    private val userMessageBus: UserMessageBus,
 ) {
     private val desktopManager: DesktopManager = localSessionManager.desktopManager
 
@@ -49,6 +52,19 @@ class AppWindowLauncher @Inject constructor(
         // the UI that renders the present overlay.
         val resolution = def.resolution ?: preferencesRepository.appWindowDefaultResolution.first()
         val scale = def.scale ?: preferencesRepository.appWindowDefaultScale.first()
+        // The cage runs the app as a single-app sway kiosk, so sway+wayvnc must
+        // be installed. Install on demand (slow, non-streaming) with a heads-up.
+        if (!desktopManager.isCageRuntimeReady()) {
+            userMessageBus.emit(
+                UserMessage(
+                    "Installing the cage runtime (sway/wayvnc) for ${def.label} — this can take a minute…",
+                    UserMessage.Severity.INFO,
+                ),
+            )
+            if (!desktopManager.ensureCageRuntime()) {
+                return@withContext "Couldn't install the cage runtime (sway/wayvnc) for ${def.label}"
+            }
+        }
         val rooted = if (def.runAsRoot) desktopManager.ensureRunAsRoot() else false
         val session = desktopManager.startAppWindow(def.command, resolution, scale, runAsRoot = rooted)
         if (session.state != DesktopManager.DesktopState.RUNNING) {

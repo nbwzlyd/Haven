@@ -4664,6 +4664,11 @@ internal class McpTools(
         val dm = localSessionManager.desktopManager
         val resolution = resolutionArg ?: preferencesRepository.appWindowDefaultResolution.first()
         val scale = scaleArg ?: preferencesRepository.appWindowDefaultScale.first()
+        // The cage runs the app as a single-app sway kiosk; install sway+wayvnc
+        // on demand (slow + non-streaming) so present_app works on a fresh distro.
+        if (!withContext(Dispatchers.IO) { dm.ensureCageRuntime() }) {
+            throw McpError(-32603, "the cage runtime (sway/wayvnc) isn't installed for '${prootManager.activeDistroId}' and couldn't be installed automatically")
+        }
         val rooted = if (runAsRoot) dm.ensureRunAsRoot() else false
         val session = withContext(Dispatchers.IO) { dm.startAppWindow(command, resolution, scale, runAsRoot = rooted) }
         if (session.state == sh.haven.core.local.DesktopManager.DesktopState.RUNNING) {

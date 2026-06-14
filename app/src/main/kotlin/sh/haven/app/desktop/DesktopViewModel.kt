@@ -489,6 +489,13 @@ class DesktopViewModel @Inject constructor(
     /** Launch a discovered app in a cage window, recording it as a saved def. */
     fun launchInstalledApp(app: InstalledApp, fullscreen: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
+            if (!desktopManager.isCageRuntimeReady()) {
+                _userMessages.emit("Installing the cage runtime (sway/wayvnc) — this can take a minute…")
+                if (!desktopManager.ensureCageRuntime()) {
+                    _userMessages.emit("Couldn't install the cage runtime for ${app.name}")
+                    return@launch
+                }
+            }
             val session = desktopManager.startAppWindow(
                 app.exec, appWindowDefaultResolution.value, appWindowDefaultScale.value,
             )

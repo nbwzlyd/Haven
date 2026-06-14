@@ -52,7 +52,7 @@ class AppWindowLauncherTest {
         coEvery { repo.upsertAppWindowDef(any(), any(), any(), any(), any(), any(), any()) } just Runs
         val lsm = mockk<LocalSessionManager>()
         every { lsm.desktopManager } returns dm
-        return AppWindowLauncher(repo, lsm, pm)
+        return AppWindowLauncher(repo, lsm, pm, mockk(relaxed = true))
     }
 
     @Test
@@ -70,6 +70,7 @@ class AppWindowLauncherTest {
     @Test
     fun launchPresentsTheRunningCageWithTheDefsFullscreenAndCaption() = runBlocking {
         val dm = mockk<DesktopManager>()
+        every { dm.isCageRuntimeReady() } returns true
         every { dm.startAppWindow(any(), any(), any(), runAsRoot = any()) } returns
             session(DesktopManager.DesktopState.RUNNING, port = 5907)
         val pm = mockk<AgentPresentationManager>(relaxed = true)

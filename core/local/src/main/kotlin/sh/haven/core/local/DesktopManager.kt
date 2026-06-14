@@ -811,6 +811,34 @@ class DesktopManager @Inject constructor(
     }
 
     /**
+     * True when the cage runtime (the Sway DE — `sway` + `wayvnc`) is installed
+     * in the active distro. A cheap file-existence check (no proot spawn), so
+     * callers can decide whether to surface "installing…" progress before the
+     * slow [ensureCageRuntime] install.
+     */
+    fun isCageRuntimeReady(): Boolean =
+        prootManager.isDesktopInstalled(ProotManager.DesktopEnvironment.SWAY)
+
+    /**
+     * Ensure the cage runtime is installed before [startAppWindow]. App windows
+     * run the app as a single-app sway kiosk, so without `sway`+`wayvnc` the
+     * kiosk exits with "sway: command not found". Mirrors [ensureRunAsRoot]: an
+     * on-demand install of the Sway DE for the active family — broader than
+     * [ensureRunAsRoot] (APT-only) because the Sway spec ships package lists for
+     * APK/APT/PACMAN/XBPS. Reuses [ProotManager.setupDesktop], which drives the
+     * `desktopState` progress flow the Desktop screen shows.
+     *
+     * Heavy and non-streaming (the Sway DE is ~60–200 MB) — call
+     * [isCageRuntimeReady] first and surface progress; don't hang a launch on it
+     * silently. Returns true if the runtime is present (already, or installed).
+     */
+    suspend fun ensureCageRuntime(): Boolean {
+        if (isCageRuntimeReady()) return true
+        prootManager.setupDesktop(vncPassword = "", de = ProotManager.DesktopEnvironment.SWAY)
+        return isCageRuntimeReady()
+    }
+
+    /**
      * Launch [command] as a single-app `cage` kiosk and expose it over
      * wayvnc. Blocks (on the caller's IO thread) until the VNC port accepts
      * connections — state RUNNING — or the launch fails / times out — state
