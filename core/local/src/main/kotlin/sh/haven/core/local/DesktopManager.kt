@@ -593,10 +593,18 @@ class DesktopManager @Inject constructor(
      * disabled — over vtest+AHB on Mali the guest never observes the feedback
      * writes and spins "stuck in fence wait" / "stuck in semaphore wait" (the
      * latter is the first-draw blocker fixed here; device-verified 2026-06-16).
-     * Note: zink's kopper present currently lands only the clear colour, not the
-     * geometry — a separate guest-Mesa gap under investigation (B4). The flags
-     * are a no-op for virpipe. [sep] is the per-site statement separator (" ; "
-     * for the cage builder, "; " for the native buildString).
+     * Note: zink GL is fine OFFSCREEN (FBO/compute — verified by glReadPixels)
+     * but a zink GL *window* doesn't present over these compositors. Root-caused
+     * (2026-06-16): the cage/native compositors advertise only wl_shm (pixman, no
+     * linux-dmabuf), so Mesa's EGL can't route zink+venus onto the kopper
+     * (Vulkan-WSI-sw) present that DOES work — it falls back to zink-on-swrast,
+     * whose drisw present never copies the rendered pixels into the committed
+     * wl_shm buffer (flicker / stale frames). Not a venus or WSI bug: native
+     * Vulkan (vkcube) presents fully over the identical path. Windowed GL needs
+     * a dmabuf/GPU-capable compositor (deferred Phase C) or an upstream Mesa fix;
+     * any guest-Mesa patch is per-distro and non-shippable. The flags are a no-op
+     * for virpipe. [sep] is the per-site statement separator (" ; " for the cage
+     * builder, "; " for the native buildString).
      */
     private fun gpuPassthroughEnv(sep: String): String =
         if (runBlocking { userPreferencesRepository.gpuUseVenus.first() }) {
