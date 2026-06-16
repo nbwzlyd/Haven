@@ -149,6 +149,13 @@ internal class McpTools(
     private val usbProxyServer by lazy { sh.haven.core.usb.UsbProxyServer(usbBroker) }
 
     /**
+     * USB/IP server — the remote-host counterpart to [usbProxyServer]. Same
+     * broker-built (not DI-wired) pattern so it stays out of the McpTools
+     * constructor signature; only the start/stop_usbip_export tools drive it.
+     */
+    private val usbIpServer by lazy { sh.haven.core.usb.UsbIpServer(usbBroker) }
+
+    /**
      * Fire-and-forget scope for agent→user *presentation* staging. present_media
      * / present_web stage the referenced file (up to [MAX_PRESENT_BYTES]) off
      * this scope so the MCP call acks immediately rather than blocking on the
@@ -1646,6 +1653,37 @@ internal class McpTools(
                 "Expose ${if (n.startsWith("/dev")) usbLabel(n) else n} to the Linux guest?"
             },
         ) { args -> usbAttachToGuest(args) },
+
+        "start_usbip_export" to ToolHandler(
+            description = "Start a userspace USB/IP server exporting a phone-attached USB device over TCP (default port 3240) so a remote Linux host can `usbip attach` it as a real local device node — every app there (ssh, libfido2, browsers) sees it, with the touch happening on the phone. Opens the device (requesting permission if needed) and returns the busid, bound port, and the client-side attach command. deviceName is optional when exactly one device is attached. Pass loopbackOnly:true to bind 127.0.0.1 only (for use behind an SSH/WireGuard tunnel); the default binds all interfaces for direct LAN attach. This is the remote-host counterpart to usb_attach_to_guest (which targets the local proot guest, where usbip can't run — the Android kernel has no vhci-hcd).",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject().apply {
+                    put("deviceName", JSONObject().apply {
+                        put("type", "string")
+                        put("description", "deviceName from list_usb_devices; optional if only one device is attached.")
+                    })
+                    put("loopbackOnly", JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Bind 127.0.0.1 only (use behind a tunnel). Default false = all interfaces, LAN-reachable.")
+                    })
+                })
+            },
+            consentLevel = ConsentLevel.ONCE_PER_SESSION,
+            summarise = { args ->
+                val n = args.optString("deviceName").ifBlank { "the attached USB device" }
+                "Export ${if (n.startsWith("/dev")) usbLabel(n) else n} over USB/IP to remote hosts?"
+            },
+        ) { args -> startUsbipExport(args) },
+
+        "stop_usbip_export" to ToolHandler(
+            description = "Stop the USB/IP server started by start_usbip_export (closes the listening socket and any active client connection). The brokered USB device handle stays open for a fast re-export.",
+            inputSchema = JSONObject().apply {
+                put("type", "object")
+                put("properties", JSONObject())
+            },
+            consentLevel = ConsentLevel.NEVER,
+        ) { args -> stopUsbipExport(args) },
 
         "open_local_shell" to ToolHandler(
             description = "Open a fresh local Alpine PRoot shell session and return its sessionId. Equivalent to tapping the Terminal icon in the Connections top bar — creates the local shell profile if missing, registers a session, and connects it. The returned sessionId is immediately usable with send_terminal_input and read_terminal_scrollback. Use this when you need a clean bash REPL (e.g. when an existing session has Claude Code, vim, or another stdin-capturing process in front of it). Pass `plain: true` to bypass the user's session-manager preference (tmux / zellij / screen / byobu) and exec a bare login shell — required when the agent needs Haven's own scrollback ring to capture output, which doesn't happen when a multiplexer's status bar uses DECSTBM to reserve the bottom row. NOTE: if a live local shell already exists, this returns that sessionId regardless of `plain` (response `reused: true`); call disconnect_profile on the existing profile first if you need a fresh plain-shell respawn.",
@@ -6569,6 +6607,48 @@ internal class McpTools(
             put("monoDllMapConfig", monoDllMapConfig(shimPath))
             put("note", "Proxy bound on abstract socket \\0$socketName. Native apps: prepend ldPreloadWrapper (verify with hidrawTestCommand via run_in_proot). Mono apps: write monoDllMapConfig as monoDllMapConfigName next to the assembly's HidSharp.dll, then run the app under mono.")
         }
+    }
+
+    private suspend fun startUsbipExport(args: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        val requested = args.optString("deviceName").takeIf { it.isNotBlank() }
+        val deviceName = requested ?: run {
+            val devices = usbBroker.listDevices()
+            when (devices.size) {
+                0 -> throw McpError(-32602, "No USB devices attached.")
+                1 -> devices.single().deviceName
+                else -> throw McpError(-32602, "Multiple USB devices attached — pass deviceName. Found: ${devices.joinToString { it.deviceName }}")
+            }
+        }
+        val info = try {
+            usbBroker.openDevice(deviceName)
+        } catch (e: Exception) {
+            throw McpError(-32603, "USB open failed: ${e.message}")
+        }
+        val loopbackOnly = args.optBoolean("loopbackOnly", false)
+        val bind = if (loopbackOnly) "127.0.0.1" else null
+        val port = usbIpServer.start(deviceName, bindAddress = bind)
+        // busid as the kernel client expects it: "<busnum>-<devnum>" from /dev/bus/usb/BBB/DDD.
+        val parts = deviceName.trimEnd('/').split('/')
+        val busid = "${parts.getOrNull(parts.size - 2)?.toIntOrNull() ?: 1}-${parts.lastOrNull()?.toIntOrNull() ?: 1}"
+        JSONObject().apply {
+            put("device", usbDeviceJson(info))
+            put("busid", busid)
+            put("port", port)
+            put("bind", bind ?: "0.0.0.0")
+            put("attachCommand", "sudo modprobe vhci-hcd && sudo usbip attach -r <phone-ip> -b $busid")
+            put("detachNote", "Detach on the client with `sudo usbip detach -p 00` (port from `usbip port`).")
+            put(
+                "note",
+                "USB/IP server bound on ${bind ?: "0.0.0.0"}:$port exporting $busid. On a Linux client with the " +
+                    "usbip tool + vhci-hcd module loaded, run the attachCommand (replace <phone-ip> with the phone's " +
+                    "address). loopbackOnly=$loopbackOnly — when true, reach it through a forwarded port.",
+            )
+        }
+    }
+
+    private suspend fun stopUsbipExport(@Suppress("UNUSED_PARAMETER") args: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        usbIpServer.stop()
+        JSONObject().apply { put("stopped", true) }
     }
 
     private suspend fun openLocalShell(args: JSONObject = JSONObject()): JSONObject = withContext(Dispatchers.IO) {
