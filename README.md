@@ -19,7 +19,6 @@
   <img src="https://img.shields.io/badge/Android-8.0%2B-3ddc84?style=flat-square&logo=android&logoColor=white" alt="Android 8.0+" />
   <a href="https://github.com/GlassHaven/Haven/releases"><img src="https://img.shields.io/github/downloads/GlassHaven/Haven/total?style=flat-square&label=downloads&cacheSeconds=3600" alt="Downloads" /></a>
   <a href="https://ko-fi.com/glassontin"><img src="https://img.shields.io/badge/Ko--fi-support-ff5e5b?style=flat-square&logo=ko-fi&logoColor=white" alt="Ko-fi" /></a>
-  <a href="https://liberapay.com/GlassOnTin"><img src="https://img.shields.io/liberapay/receives/GlassOnTin.svg?style=flat-square&logo=liberapay&logoColor=white&label=Liberapay" alt="Liberapay" /></a>
 </p>
 
 <p align="center">
@@ -30,11 +29,8 @@
 ---
 
 <p align="center">
-  <img src="docs/haven-gpu-gl.gif" width="540" alt="GPU-accelerated Linux OpenGL on Android — Mesa zink on venus, Mali passthrough" /><br/>
-  <sub><b>GPU-accelerated Linux OpenGL</b>, live on the phone — Mesa <b>zink</b> on <b>venus</b> passes the <b>Mali</b> GPU through to a desktop Linux GL app in a Haven cage, with no <code>/dev/dri</code>.</sub>
-</p>
-
-<p align="center">
+  <img src="docs/haven-gpu-gl.gif" width="140" alt="GPU-accelerated Linux OpenGL — Mesa zink on venus, Mali passthrough" />
+  &nbsp;
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/3_wayland_desktop.png" width="140" />
   &nbsp;
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/1_terminal.png" width="140" />
@@ -46,6 +42,10 @@
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/4_cloud_storage.png" width="140" />
   &nbsp;
   <img src="fastlane/metadata/android/en-US/images/phoneScreenshots/7_keys.png" width="140" />
+</p>
+
+<p align="center">
+  <sub>Leftmost: <b>GPU-accelerated Linux OpenGL</b> running live on the phone — Mesa <b>zink</b> on <b>venus</b> passes the <b>Mali</b> GPU through to a desktop Linux GL app in a Haven cage, with no <code>/dev/dri</code>.</sub>
 </p>
 
 ---
