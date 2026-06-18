@@ -614,7 +614,16 @@ class DesktopManager @Inject constructor(
                 "export GALLIUM_DRIVER=zink$sep" +
                 "export MESA_LOADER_DRIVER_OVERRIDE=zink$sep" +
                 "export VN_PERF=no_fence_feedback,no_semaphore_feedback$sep" +
-                "export MESA_VK_WSI_DEBUG=sw$sep"
+                "export MESA_VK_WSI_DEBUG=sw$sep" +
+                // If the guest built+cached the patched zink (libgallium) via the
+                // mesa-venus-fix build, LD_PRELOAD it so the per-frame UBO is
+                // re-issued through the command stream — venus host-visible memory
+                // isn't reliably GPU-visible over vtest, so without this the model
+                // flickers off-screen ~2/3 of frames (project_virgl_cage_gpu_accel
+                // R5). Absent cache => empty `preload` test fails => stock zink.
+                // Path mirrors build.sh's PREFIX; see ProotManager.stageMesaVenusFix.
+                "if [ -s /usr/local/lib/haven/mesa-venus-fix/preload ]; then " +
+                "export LD_PRELOAD=\"\$(cat /usr/local/lib/haven/mesa-venus-fix/preload)\"; fi$sep"
         } else {
             "export GALLIUM_DRIVER=virpipe$sep" +
                 "export VTEST_SOCKET=/tmp/.virgl_test$sep" +

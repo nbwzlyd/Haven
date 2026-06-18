@@ -1724,6 +1724,46 @@ chmod +x /root/.vnc/xstartup""")
         return if (probeOk) "/usr/local/bin/haven-usb-probe" else null
     }
 
+    /**
+     * Stage the venus windowed-GL fix assets into the active rootfs:
+     *  - /usr/local/share/haven/mesa-venus-fix/mesa-venus-gl.patch
+     *  - /usr/local/share/haven/mesa-venus-fix/build.sh
+     *
+     * These let the guest build a patched Mesa (libgallium + libEGL) once per
+     * distro so windowed zink+venus GL both PRESENTS over the wl_shm cage
+     * (platform_wayland.c routing → kopper sw-WSI) and stops flickering (the
+     * per-frame UBO re-issued through the command stream because venus
+     * host-visible memory isn't reliably GPU-visible over vtest). Device-
+     * verified 0% flat vs ~42% (see project_virgl_cage_gpu_accel R5).
+     * ABI-independent text; re-copied on every desktop start so an app update
+     * refreshes the patch/script. The built+cached `.so` and `preload` under
+     * /usr/local/lib/haven/mesa-venus-fix/ are NOT assets and are preserved.
+     * Built only when explicitly triggered ([mesaVenusFixBuildCommand]); never
+     * on the launch hot path. gpuPassthroughEnv LD_PRELOADs the cache if present.
+     */
+    fun stageMesaVenusFix() {
+        val destDir = File(activeRootfsDir, "usr/local/share/haven/mesa-venus-fix")
+        fun copy(name: String) = try {
+            val target = File(destDir, name)
+            target.parentFile?.mkdirs()
+            context.assets.open("mesa-venus-fix/$name").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            target.setReadable(true, false)
+            Log.d(TAG, "[mesa-venus-fix] staged $name (${target.length()} bytes)")
+        } catch (e: Exception) {
+            Log.w(TAG, "[mesa-venus-fix] failed to stage $name: ${e.message}")
+        }
+        copy("mesa-venus-gl.patch")
+        copy("build.sh")
+    }
+
+    /** In-guest command that builds + caches the patched zink (idempotent, slow — ~20-40 min, needs network). */
+    val mesaVenusFixBuildCommand: String get() = "sh /usr/local/share/haven/mesa-venus-fix/build.sh"
+
+    /** Absolute in-guest path of the LD_PRELOAD list written by [mesaVenusFixBuildCommand]. */
+    val mesaVenusFixPreloadPath: String get() = "/usr/local/lib/haven/mesa-venus-fix/preload"
+
     /** Absolute in-guest path of the LD_PRELOAD/DllMap shim staged by [stageHavenUsbArtifacts]. */
     val havenUsbShimGuestPath: String get() = "/usr/local/lib/haven/libhaven_usb.so"
 
@@ -1734,6 +1774,9 @@ chmod +x /root/.vnc/xstartup""")
         // Refresh the shim on every start so an app update's newer shim
         // replaces a stale one in an existing rootfs (#162).
         stageWayvncShim(de)
+        // Refresh the venus GL coherency-fix assets too (patch + build script);
+        // the built .so cache under the same dir is preserved.
+        stageMesaVenusFix()
         for ((relPath, content) in de.spec.configSeed) {
             val target = File(activeRootfsDir, relPath)
             val existing = if (target.exists()) {
