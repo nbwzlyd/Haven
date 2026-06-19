@@ -166,4 +166,27 @@
     <!-- RenameKeyDialog (#231) -->
     <string name="keys_rename">नाम बदलें</string>
     <string name="keys_rename_title">कुंजी का नाम बदलें</string>
+
+    <!-- FIDO2 / security-key registration (#250) -->
+    <string name="keys_offer_for_connections">कनेक्शन के लिए उपलब्ध कराएँ</string>
+    <string name="keys_sk_require_pin">साइन इन के समय PIN आवश्यक करें</string>
+    <string name="keys_security_key">सुरक्षा कुंजी (YubiKey)</string>
+    <string name="keys_security_key_hint">किसी FIDO2 कुंजी पर नई SSH कुंजी सेट करें, या उस पर पहले से मौजूद कुंजियाँ इंपोर्ट करें।</string>
+    <string name="keys_security_key_setup">उस पर नई कुंजी सेट करें</string>
+    <string name="keys_security_key_setup_hint">सुरक्षा कुंजी पर एक SSH कुंजी बनाएँ (नई होने पर PIN सेट करता है)। कोई लैपटॉप या ssh-keygen नहीं।</string>
+    <string name="keys_security_key_import">उस पर पहले से मौजूद कुंजियाँ इंपोर्ट करें</string>
+    <string name="keys_security_key_import_hint">कुंजी पर पहले से संग्रहीत रेज़िडेंट SSH-SK क्रेडेंशियल जोड़ें (जो कहीं और ssh-keygen -O resident से बनाए गए हों)।</string>
+    <string name="keys_register_on_security_key">सुरक्षा कुंजी पर SSH कुंजी सेट करें</string>
+    <string name="keys_register_on_security_key_body">सुरक्षा कुंजी पर एक रेज़िडेंट sk-ssh-ed25519 क्रेडेंशियल बनाता है। फिर: इसे USB से कनेक्ट करके दबाएँ, या NFC के लिए इसे फ़ोन के पिछले हिस्से पर टैप करके रखें।</string>
+    <string name="keys_register_verify_required">हर साइन इन पर PIN आवश्यक करें</string>
+    <string name="keys_register_verify_required_hint">चालू: कुंजी हर बार SSH लॉगिन पर हस्ताक्षर करते समय अपना PIN माँगती है (verify-required — अधिक सुरक्षित)। बंद: केवल टच।</string>
+    <string name="keys_register_pin">सुरक्षा कुंजी का PIN</string>
+    <string name="keys_register_pin_confirm">PIN की पुष्टि करें</string>
+    <string name="keys_register_pin_hint">कुंजी नई हो तो PIN चुनें, अन्यथा उसका मौजूदा PIN दर्ज करें। 4+ वर्ण।</string>
+    <string name="keys_register_pin_mismatch">PIN मेल नहीं खाते</string>
+    <string name="keys_register_action">रजिस्टर करें</string>
+    <string name="keys_fido_pin_set_title">सुरक्षा कुंजी का PIN बनाएँ</string>
+    <string name="keys_fido_pin_set_help">इस सुरक्षा कुंजी का अभी कोई PIN नहीं है। एक चुनें (4–63 वर्ण) — कुंजी द्वारा हस्ताक्षर करते समय आप इसे दर्ज करेंगे।</string>
+    <string name="keys_fido_pin_confirm_label">PIN की पुष्टि करें</string>
+    <string name="keys_fido_pin_mismatch">PIN मेल नहीं खाते</string>
 </resources>

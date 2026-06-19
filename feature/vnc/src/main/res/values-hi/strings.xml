@@ -21,4 +21,10 @@
     <string name="vnc_orientation_landscape_desc">Landscape लॉक (portrait पर स्विच करने के लिए टैप करें)</string>
     <string name="vnc_orientation_portrait_desc">Portrait लॉक (auto पर स्विच करने के लिए टैप करें)</string>
     <string name="vnc_orientation_auto_desc">Auto rotate (landscape पर स्विच करने के लिए टैप करें)</string>
+    <!-- Touch gesture help (#250) -->
+    <string name="vnc_cd_gesture_help">टच जेस्चर</string>
+    <string name="vnc_cd_save_default">मौजूदा आकार को इस ऐप के डिफ़ॉल्ट के रूप में सहेजें</string>
+    <string name="vnc_gesture_help_title">टच जेस्चर</string>
+    <string name="vnc_gesture_help_two_finger">स्क्रॉल करने के लिए दो उँगलियों से खींचें; ज़ूम करने के लिए उन्हें सिकोड़ें। एक उँगली माउस है।</string>
+    <string name="vnc_gesture_help_three_finger">फ़ुलस्क्रीन में रहते हुए ऐप का आकार बदलने के लिए तीन उँगलियों से सिकोड़ें।</string>
 </resources>

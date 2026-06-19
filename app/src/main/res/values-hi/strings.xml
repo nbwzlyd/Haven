@@ -146,4 +146,29 @@
     <!-- Local Linux desktop manager -->
     <string name="app_desktop_manager_title">स्थानीय Linux डेस्कटॉप</string>
     <string name="app_desktop_manager_description">Haven के अंदर पूरा Linux डेस्कटॉप चलाएँ। एक distro चुनें, एक डेस्कटॉप वातावरण (Xfce4, Openbox, या Sway) इंस्टॉल करें, फिर लॉन्च करें — किसी अलग सर्वर या कनेक्शन की ज़रूरत नहीं।</string>
+
+    <!-- App windows / installed-app launcher (#250) -->
+    <string name="app_desktop_app_window_pin_home_cd">%1$s को होम स्क्रीन पर जोड़ें</string>
+    <string name="app_desktop_browse_installed_apps">इंस्टॉल किए गए ऐप्स ब्राउज़ करें</string>
+    <string name="app_desktop_installed_apps_title">इंस्टॉल किए गए ऐप्स</string>
+    <string name="app_desktop_installed_apps_search">ऐप्स खोजें</string>
+    <string name="app_desktop_installed_apps_count">%1$d ऐप्स · %2$d आइकन के साथ</string>
+    <string name="app_desktop_installed_apps_empty">सक्रिय distro में कोई ग्राफ़िकल ऐप्लिकेशन नहीं मिला।</string>
+    <string name="app_desktop_installed_apps_close_cd">बंद करें</string>
+    <string name="app_desktop_installed_app_icon_cd">%1$s आइकन</string>
+    <string name="app_desktop_installed_app_launch_cd">%1$s लॉन्च करें</string>
+    <string name="app_desktop_installed_app_fullscreen_on_cd">%1$s फ़ुलस्क्रीन में खुलता है — विंडो मोड के लिए टैप करें</string>
+    <string name="app_desktop_installed_app_fullscreen_off_cd">%1$s विंडो मोड में खुलता है — फ़ुलस्क्रीन के लिए टैप करें</string>
+    <string name="app_desktop_app_window_fullscreen">फ़ुलस्क्रीन में खोलें</string>
+    <string name="app_desktop_app_window_run_as_root">root के रूप में चलाएँ</string>
+    <string name="app_desktop_app_window_run_as_root_hint">पैकेज मैनेजर और सिस्टम टूल के लिए (fakeroot इंस्टॉल करता है)</string>
+    <string name="app_desktop_app_window_resolution">रिज़ॉल्यूशन</string>
+    <string name="app_desktop_app_window_scale">स्केल</string>
+    <string name="app_desktop_opt_default">डिफ़ॉल्ट</string>
+    <string name="app_desktop_res_auto">ऑटो</string>
+    <string name="app_desktop_res_landscape">लैंडस्केप</string>
+    <string name="app_desktop_res_custom">कस्टम</string>
+    <string name="app_desktop_res_custom_hint">चौड़ाई×ऊँचाई, उदा. 1024x600</string>
+    <string name="app_desktop_app_window_defaults">डिफ़ॉल्ट डिस्प्ले (सभी ऐप विंडो)</string>
+    <string name="app_window_scale_saved">इस ऐप के डिफ़ॉल्ट आकार के रूप में सहेजा गया</string>
 </resources>
