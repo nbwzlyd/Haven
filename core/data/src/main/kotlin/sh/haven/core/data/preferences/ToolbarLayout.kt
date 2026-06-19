@@ -276,3 +276,50 @@ object SnippetOps {
         }
     }
 }
+
+/**
+ * Rebuild the toolbar rows from the settings editor's per-key row assignments.
+ *
+ * The editor models keys as ROW1 / ROW2 / OFF sets, which on its own loses the
+ * on-toolbar order — so the old Save path rewrote every row in enum/list order,
+ * wiping any hold-and-drag arrangement the moment you toggled an unrelated key
+ * (#245). This preserves the existing order: a key that stays in its row keeps
+ * its position; only keys newly moved into a row are appended (built-ins in
+ * [ToolbarKey] order, customs in editor order).
+ */
+object ToolbarEditorOps {
+    /**
+     * @param previous the currently-saved layout (the source of existing order)
+     * @param builtinRows ToolbarKey → target row (0 = row 1, 1 = row 2, null = off)
+     * @param customRows ordered (custom item → target row) from the editor
+     * @return the two rebuilt rows [row1, row2]
+     */
+    fun rebuildRows(
+        previous: ToolbarLayout,
+        builtinRows: Map<ToolbarKey, Int?>,
+        customRows: List<Pair<ToolbarItem.Custom, Int?>>,
+    ): List<List<ToolbarItem>> {
+        fun rowFor(target: Int): List<ToolbarItem> {
+            val existing = previous.rows.getOrElse(target) { emptyList() }
+            // 1. items already in this row that are still assigned here — kept in order.
+            val kept = existing.filter { item ->
+                when (item) {
+                    is ToolbarItem.BuiltIn -> builtinRows[item.key] == target
+                    is ToolbarItem.Custom -> customRows.any { it.first == item && it.second == target }
+                }
+            }
+            val keptBuiltins = kept.filterIsInstance<ToolbarItem.BuiltIn>().map { it.key }.toSet()
+            val keptCustoms = kept.filterIsInstance<ToolbarItem.Custom>().toSet()
+            // 2. built-ins newly moved into this row, appended in enum order.
+            val addedBuiltins = ToolbarKey.entries
+                .filter { builtinRows[it] == target && it !in keptBuiltins }
+                .map { ToolbarItem.BuiltIn(it) }
+            // 3. customs newly moved into this row, appended in editor order.
+            val addedCustoms = customRows
+                .filter { it.second == target && it.first !in keptCustoms }
+                .map { it.first }
+            return kept + addedBuiltins + addedCustoms
+        }
+        return listOf(rowFor(0), rowFor(1))
+    }
+}

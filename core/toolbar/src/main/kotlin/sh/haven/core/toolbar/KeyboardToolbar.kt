@@ -448,9 +448,18 @@ private fun AlignedToolbarContent(
     fun ToolbarItem.isKey(k: ToolbarKey) = this is ToolbarItem.BuiltIn && this.key == k
     val r1Keyboard = row1Left.firstOrNull { it.isKey(ToolbarKey.KEYBOARD) }
     val r1Attach = row1Left.firstOrNull { it.isKey(ToolbarKey.ATTACH) }
-    val r1Rest = row1Left.filterNot { it.isKey(ToolbarKey.KEYBOARD) || it.isKey(ToolbarKey.ATTACH) }
     val r2Voice = row2Left.firstOrNull { it.isKey(ToolbarKey.VOICE_KEYBOARD) }
-    val r2Rest = row2Left.filterNot { it.isKey(ToolbarKey.VOICE_KEYBOARD) }
+    // Pin Attach (row 1) over Voice (row 2) into the fixed leading column ONLY
+    // when both are present. If one is disabled, the survivor reflows into its
+    // row's normal keys instead of being stranded in a paired column with an
+    // empty cell next to it; when both are off the column isn't drawn at all.
+    // So turning a key off actually gives its space back rather than leaving a
+    // dead box (#245).
+    val pinAttachVoice = r1Attach != null && r2Voice != null
+    val r1Rest = row1Left.filterNot {
+        it.isKey(ToolbarKey.KEYBOARD) || (pinAttachVoice && it.isKey(ToolbarKey.ATTACH))
+    }
+    val r2Rest = row2Left.filterNot { pinAttachVoice && it.isKey(ToolbarKey.VOICE_KEYBOARD) }
 
     // Collect which nav keys are present across all rows
     val presentNavKeys = layout.rows.flatten()
@@ -505,31 +514,37 @@ private fun AlignedToolbarContent(
             }
         }
 
-        // Col 0: keyboard toggle (top) / VNC-desktop icon (bottom).
-        KeyColumn(
-            top = itemRenderer(r1Keyboard),
-            bottom = if (onVncTap != null) {
-                {
-                    if (vncLoading) {
-                        Box(
-                            modifier = Modifier.size(32.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                            )
+        // Col 0: keyboard toggle (top) / VNC-desktop icon (bottom). Skip the
+        // whole column when neither is present so it leaves no empty box (#245).
+        if (r1Keyboard != null || onVncTap != null) {
+            KeyColumn(
+                top = itemRenderer(r1Keyboard),
+                bottom = if (onVncTap != null) {
+                    {
+                        if (vncLoading) {
+                            Box(
+                                modifier = Modifier.size(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            }
+                        } else {
+                            ToolbarIconButton(Icons.Filled.DesktopWindows, stringResource(R.string.toolbar_vnc_desktop), onVncTap)
                         }
-                    } else {
-                        ToolbarIconButton(Icons.Filled.DesktopWindows, stringResource(R.string.toolbar_vnc_desktop), onVncTap)
                     }
-                }
-            } else {
-                null
-            },
-        )
-        // Col 1: Attach (top) / Voice toggle (bottom).
-        KeyColumn(top = itemRenderer(r1Attach), bottom = itemRenderer(r2Voice))
+                } else {
+                    null
+                },
+            )
+        }
+        // Col 1: Attach (top) / Voice toggle (bottom) — only when both are
+        // present; a lone survivor reflows into the rest columns below (#245).
+        if (pinAttachVoice) {
+            KeyColumn(top = itemRenderer(r1Attach), bottom = itemRenderer(r2Voice))
+        }
         // Remaining columns: row-1 key over row-2 key, paired by position.
         val restColumns = maxOf(r1Rest.size, r2Rest.size)
         for (i in 0 until restColumns) {

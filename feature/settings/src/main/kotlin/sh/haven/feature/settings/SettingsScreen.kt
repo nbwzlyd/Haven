@@ -139,6 +139,7 @@ import sh.haven.core.ui.navigation.Screen
 import sh.haven.core.data.preferences.EditModeControlsPlacement
 import sh.haven.core.data.preferences.MACRO_PRESETS
 import sh.haven.core.data.preferences.NavBlockMode
+import sh.haven.core.data.preferences.ToolbarEditorOps
 import sh.haven.core.data.preferences.ToolbarItem
 import sh.haven.core.data.preferences.ToolbarKey
 import sh.haven.core.data.preferences.ToolbarLayout
@@ -2543,23 +2544,21 @@ private fun ToolbarSimpleEditor(
         },
         confirmButton = {
             TextButton(onClick = {
-                val customRow1 = customKeys
-                    .filter { it.row == KeyAssignment.ROW1 }
-                    .map { it.item }
-                val customRow2 = customKeys
-                    .filter { it.row == KeyAssignment.ROW2 }
-                    .map { it.item }
                 // OFF snippets go to the library (kept in the scissors sheet)
                 // rather than being discarded (#244).
                 val library = customKeys
                     .filter { it.row == KeyAssignment.OFF }
                     .map { it.item }
-                val newRow1 = ToolbarKey.entries
-                    .filter { assignments[it] == KeyAssignment.ROW1 }
-                    .map { ToolbarItem.BuiltIn(it) } + customRow1
-                val newRow2 = ToolbarKey.entries
-                    .filter { assignments[it] == KeyAssignment.ROW2 }
-                    .map { ToolbarItem.BuiltIn(it) } + customRow2
+                // Rebuild rows preserving the existing on-toolbar order — toggling
+                // one key must not reset a hand-arranged toolbar to defaults (#245).
+                fun KeyAssignment.toRowIndex(): Int? = when (this) {
+                    KeyAssignment.ROW1 -> 0
+                    KeyAssignment.ROW2 -> 1
+                    KeyAssignment.OFF -> null
+                }
+                val builtinRows = assignments.mapValues { it.value.toRowIndex() }
+                val customRows = customKeys.map { it.item to it.row.toRowIndex() }
+                val (newRow1, newRow2) = ToolbarEditorOps.rebuildRows(layout, builtinRows, customRows)
                 onSave(ToolbarLayout(listOf(newRow1, newRow2)), library)
             }) {
                 Text(stringResource(R.string.common_save))
