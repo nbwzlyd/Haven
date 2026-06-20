@@ -178,6 +178,9 @@ internal class McpTools(
     @Volatile
     private var agentNotificationChannelEnsured = false
 
+    @Volatile
+    private var installNotificationChannelEnsured = false
+
     /** Tool registry: name → handler. */
     private val tools: Map<String, ToolHandler> = linkedMapOf(
         "get_app_info" to ToolHandler(
@@ -4733,6 +4736,23 @@ internal class McpTools(
         agentNotificationChannelEnsured = true
     }
 
+    private fun ensureInstallNotificationChannel() {
+        if (installNotificationChannelEnsured) return
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            INSTALL_NOTIFICATION_CHANNEL_ID,
+            "App update install",
+            // HIGH so the tap-to-install prompt can surface as a heads-up when
+            // Haven is backgrounded — Android blocks a background app from
+            // launching the installer directly, so the user's tap is the way in.
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Tap-to-install prompts for an APK staged by install_apk_from_backend / _from_url when Shizuku isn't available for a silent install."
+        }
+        nm.createNotificationChannel(channel)
+        installNotificationChannelEnsured = true
+    }
+
     /**
      * Launch [command] as a single-app cage kiosk in the guest and surface
      * its live VNC view in the present_media overlay. Blocks (on IO) until
@@ -6176,18 +6196,29 @@ internal class McpTools(
                 )
             }
         }
+        val shizukuReady = sh.haven.core.local.WaylandSocketHelper.isShizukuAvailable() &&
+            sh.haven.core.local.WaylandSocketHelper.hasShizukuPermission()
         JSONObject().apply {
             put("installed", false)
             put("pending", true)
             put("staging", true)
             put("bytes", sizeBytes)
+            // Tells the caller whether the install will be silent (Shizuku) or
+            // need a user tap on the staged-update notification (no Shizuku).
+            put("shizukuReady", shizukuReady)
             put(
                 "message",
                 "Streaming $sizeBytes bytes from $backendLabel and installing in the " +
                     "background — backend transfers can outlast the request timeout, so this " +
-                    "returns immediately rather than blocking. Confirm the running build with " +
-                    "get_app_info; if Haven is updating itself the MCP link drops on restart, " +
-                    "so reconnect (/mcp reconnect) first.",
+                    "returns immediately rather than blocking. " +
+                    (if (shizukuReady) {
+                        "Shizuku is available: install is silent. "
+                    } else {
+                        "No Shizuku: a 'Haven update ready — tap to install' notification will " +
+                            "appear (it survives backgrounding) — tap it to confirm. "
+                    }) +
+                    "Confirm the running build with get_app_info; if Haven is updating itself " +
+                    "the MCP link drops on restart, so reconnect (/mcp reconnect) first.",
             )
         }
     }
@@ -6258,32 +6289,90 @@ internal class McpTools(
                     or android.content.Intent.FLAG_ACTIVITY_NEW_TASK,
             )
         }
-        try {
+        // Best-effort direct launch — works when Haven is foreground; Android
+        // suppresses an activity start from the background (the install dialog
+        // that "vanishes" when you switch away). The notification below is the
+        // robust path: the user's tap is a foreground gesture the OS lets
+        // through, so the installer appears even when Haven was backgrounded.
+        val directLaunched = try {
             context.startActivity(intent)
-        } catch (e: Exception) {
+            true
+        } catch (_: Exception) {
+            false
+        }
+
+        var notified = false
+        val versionName = runCatching {
+            context.packageManager.getPackageArchiveInfo(target.absolutePath, 0)?.versionName
+        }.getOrNull()
+        try {
+            val managerCompat = NotificationManagerCompat.from(context)
+            if (managerCompat.areNotificationsEnabled()) {
+                ensureInstallNotificationChannel()
+                val piFlags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    android.app.PendingIntent.FLAG_IMMUTABLE
+                val pending = android.app.PendingIntent.getActivity(
+                    context, target.absolutePath.hashCode(), intent, piFlags,
+                )
+                val notif = NotificationCompat.Builder(context, INSTALL_NOTIFICATION_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                    .setContentTitle("Haven update ready")
+                    .setContentText(
+                        versionName?.let { "Tap to install Haven $it" }
+                            ?: "Tap to install the staged update",
+                    )
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_RECOMMENDATION)
+                    .setContentIntent(pending)
+                    // Asks the OS to surface it immediately as a heads-up — the
+                    // closest a backgrounded app gets to "comes to the foreground".
+                    .setFullScreenIntent(pending, true)
+                    .setAutoCancel(true)
+                    .build()
+                NotificationManagerCompat.from(context)
+                    .notify(target.absolutePath.hashCode(), notif)
+                notified = true
+            }
+        } catch (_: Exception) {
+            // Notification is best-effort; a failed post must not abort the install.
+        }
+
+        // Keep the staged APK long enough for the user to tap the notification
+        // (the direct dialog reads it in seconds; the notification path can be
+        // minutes), then clean up so it doesn't linger.
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+            { target.delete() },
+            15 * 60 * 1000L,
+        )
+
+        if (!directLaunched && !notified) {
             target.delete()
             throw McpError(
                 -32603,
-                "Failed to launch system installer: ${e.message}. " +
-                    "Shizuku also unavailable (${shizukuReason ?: "no detail"}).",
+                "Couldn't launch the installer or post a tap-to-install notification " +
+                    "(Shizuku unavailable: ${shizukuReason ?: "no detail"}). " +
+                    "Enable notifications for Haven, or start Shizuku for silent installs.",
             )
         }
-        // Schedule a delayed cleanup of the staged APK so it doesn't
-        // linger if the user dismisses the install dialog. 5-min
-        // window is generous — the system installer reads the file
-        // when the user taps Install, typically within seconds.
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
-            { target.delete() },
-            5 * 60 * 1000L,
-        )
         return JSONObject().apply {
             put("installed", false)
             put("pending", true)
             put("bytesDownloaded", written)
+            put("shizukuReady", false)
+            put("notified", notified)
             put(
                 "message",
-                "Shizuku unavailable (${shizukuReason ?: "not running"}); " +
-                    "system installer dialog launched — confirm on-device to complete the install.",
+                buildString {
+                    append("Shizuku unavailable (${shizukuReason ?: "not running"}) — no silent install. ")
+                    if (notified) {
+                        append("Posted a 'Haven update ready — tap to install' notification that " +
+                            "survives Haven being backgrounded; tap it to confirm. ")
+                    }
+                    if (directLaunched) {
+                        append("Also opened the installer directly (visible if Haven is in the foreground). ")
+                    }
+                    append("Start Shizuku for fully silent installs.")
+                },
             )
         }
     }
@@ -9550,6 +9639,7 @@ private fun emptyObjectSchema(): JSONObject = JSONObject().apply {
  * silencing real Haven notifications.
  */
 private const val AGENT_NOTIFICATION_CHANNEL_ID = "agent.test.notifications"
+private const val INSTALL_NOTIFICATION_CHANNEL_ID = "agent.install"
 
 /** Upper bound on lines requested from logcat in a single read_logcat call. */
 private const val MAX_LOGCAT_LINES = 5000
