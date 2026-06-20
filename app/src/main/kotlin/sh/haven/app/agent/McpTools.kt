@@ -1463,7 +1463,7 @@ internal class McpTools(
         ) { _ -> openDeveloperSettings() },
 
         "install_apk_from_url" to ToolHandler(
-            description = "Download an APK from a URL and install it on the device. With Shizuku running and granted, install is silent via `pm install`. Without Shizuku, falls back to firing the system installer dialog (single user tap to confirm) — response includes `pending: true` so the caller knows to wait for the user. Useful for agent-driven self-update or sideloading over VPN where wireless ADB isn't reachable.",
+            description = "Download an APK from a URL and install it on the device. With Shizuku running and granted, install is silent via `pm install`. Without Shizuku, falls back to firing the system installer dialog (single user tap to confirm) — response includes `pending: true` so the caller knows to wait for the user. Useful for agent-driven self-update or sideloading over VPN where wireless ADB isn't reachable. NOTE: Android's network-security policy blocks cleartext http:// to anything but localhost, so an http:// URL on the LAN (e.g. a workstation IP) is rejected — use https://, or install_apk_from_backend (SFTP/rclone/Reticulum) which carries no cleartext.",
             inputSchema = JSONObject().apply {
                 put("type", "object")
                 put("properties", JSONObject().apply {
@@ -3022,6 +3022,15 @@ internal class McpTools(
     @Volatile
     private var currentClientHint: String? = null
 
+    /**
+     * Terminal outcome of the most recent backgrounded backend install
+     * (install_apk_from_backend returns `pending` and finishes off-call, so the
+     * result is otherwise only in logcat). Surfaced in get_app_info so an agent
+     * can confirm the install landed without parsing logs. (#245 follow-up)
+     */
+    @Volatile
+    private var lastInstallResult: JSONObject? = null
+
     /** Call a tool by name. Throws [McpError] for bad input. */
     suspend fun call(name: String, arguments: JSONObject, clientHint: String? = null): JSONObject {
         currentClientHint = clientHint
@@ -3089,6 +3098,9 @@ internal class McpTools(
             put("wayland")
             put("ffmpeg")
         })
+        // Terminal result of the last backgrounded backend install, if any —
+        // lets a caller confirm a pending install landed. (#245 follow-up)
+        lastInstallResult?.let { put("lastInstall", it) }
     }
 
     private suspend fun listPairedClients(): JSONObject {
@@ -6150,8 +6162,18 @@ internal class McpTools(
                 installStagedApk(target, written)
             }.onFailure {
                 android.util.Log.w("McpTools", "backend APK install failed ($path): ${it.message}")
+                recordInstallOutcome(profileId, path, backendLabel, ok = false, detail = it.message)
             }.onSuccess {
                 android.util.Log.i("McpTools", "backend APK install completed ($path): $it")
+                // installStagedApk returns {installed} (Shizuku) or {pending}
+                // (system-installer handoff) — both mean the background work
+                // reached the install step without error.
+                val staged = it.optBoolean("pending", false)
+                recordInstallOutcome(
+                    profileId, path, backendLabel,
+                    ok = true,
+                    detail = if (staged) "awaiting on-device install confirmation" else "installed",
+                )
             }
         }
         JSONObject().apply {
@@ -6166,6 +6188,39 @@ internal class McpTools(
                     "returns immediately rather than blocking. Confirm the running build with " +
                     "get_app_info; if Haven is updating itself the MCP link drops on restart, " +
                     "so reconnect (/mcp reconnect) first.",
+            )
+        }
+    }
+
+    /**
+     * Persist the terminal outcome of a backgrounded backend install so it's
+     * discoverable after the `pending` ack: a queryable snapshot in
+     * get_app_info's `lastInstall`, plus a connection-log entry (visible in
+     * Settings → connection log; no-ops on an orphan/"local" profile id via the
+     * repository's FK guard). (#245 follow-up)
+     */
+    private suspend fun recordInstallOutcome(
+        profileId: String,
+        path: String,
+        backendLabel: String,
+        ok: Boolean,
+        detail: String?,
+    ) {
+        lastInstallResult = JSONObject().apply {
+            put("ok", ok)
+            put("path", path)
+            put("backend", backendLabel)
+            detail?.let { put("detail", it) }
+        }
+        runCatching {
+            connectionLogRepository.logEvent(
+                profileId,
+                if (ok) {
+                    sh.haven.core.data.db.entities.ConnectionLog.Status.CONNECTED
+                } else {
+                    sh.haven.core.data.db.entities.ConnectionLog.Status.FAILED
+                },
+                details = "install_apk_from_backend: $path — ${detail ?: if (ok) "ok" else "failed"}",
             )
         }
     }

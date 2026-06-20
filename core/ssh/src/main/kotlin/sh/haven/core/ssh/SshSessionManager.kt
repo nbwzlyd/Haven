@@ -581,6 +581,35 @@ class SshSessionManager @Inject constructor(
     }
 
     /**
+     * Suspend until a CONNECTED session exists for [profileId], when one is
+     * currently (re)connecting. Returns true if connected (already, or within
+     * [timeoutMs]); false immediately when nothing is live or in flight.
+     *
+     * Unlike [awaitReusableClient] this also waits through RECONNECTING and is
+     * used by the file-backend resolver: right after the app restarts from a
+     * self-install the restored SSH session is briefly RECONNECTING, so a
+     * backend lookup would otherwise return null and read as "No connected
+     * backend" even though the session is coming back. (#245 follow-up)
+     */
+    suspend fun awaitConnected(profileId: String, timeoutMs: Long = 12_000): Boolean {
+        if (isProfileConnected(profileId)) return true
+        val inFlight = _sessions.value.values.any {
+            it.profileId == profileId &&
+                (it.status == SessionState.Status.CONNECTING ||
+                    it.status == SessionState.Status.RECONNECTING)
+        }
+        if (!inFlight) return false
+        return withTimeoutOrNull(timeoutMs) {
+            _sessions.first { map ->
+                map.values.any {
+                    it.profileId == profileId && it.status == SessionState.Status.CONNECTED
+                }
+            }
+            true
+        } ?: false
+    }
+
+    /**
      * Store a bookkeeping [ConnectionConfig] for a connection-reuse session
      * [sessionId] — one that was registered against another session's live
      * [SshClient] instead of dialing its own. The config carries reconnect
