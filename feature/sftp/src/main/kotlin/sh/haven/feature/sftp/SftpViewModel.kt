@@ -1460,6 +1460,7 @@ class SftpViewModel @Inject constructor(
                         size = entry.size,
                         contentType = guessContentType(entry.name),
                         opener = smbOpener(entry.path),
+                        concurrentSafe = true,
                     )
                     ffmpegInput = "http://127.0.0.1:$port$urlPath"
                     Log.d(TAG, "convertFile: streaming SMB via $ffmpegInput")
@@ -1761,6 +1762,7 @@ class SftpViewModel @Inject constructor(
                     size = entry.size,
                     contentType = guessContentType(entry.name),
                     opener = smbOpener(entry.path),
+                    concurrentSafe = true,
                 )
                 "http://127.0.0.1:$port$urlPath"
             }
@@ -2359,6 +2361,7 @@ class SftpViewModel @Inject constructor(
                             size = entry.size,
                             contentType = guessContentType(entry.name),
                             opener = smbOpener(entry.path),
+                            concurrentSafe = true,
                         )
                         inputSource = "http://127.0.0.1:$port$urlPath"
                         isRemote = true
@@ -4769,6 +4772,7 @@ class SftpViewModel @Inject constructor(
                             size = entry.size,
                             contentType = mime,
                             opener = smbOpener(entry.path),
+                            concurrentSafe = true,
                         )
                         data = android.net.Uri.parse("http://127.0.0.1:$port$urlPath")
                     }

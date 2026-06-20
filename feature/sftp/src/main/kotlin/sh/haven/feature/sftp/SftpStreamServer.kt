@@ -47,6 +47,14 @@ class SftpStreamServer @Inject constructor() : Closeable {
         val size: Long,
         val contentType: String,
         val opener: Opener,
+        /**
+         * True when [opener] produces an independent handle per call so several
+         * Range requests can be served at once (SMB / local). False for SFTP,
+         * whose shared channel isn't concurrency-safe — those still serialise on
+         * [channelLock]. External players (VLC) open concurrent connections and
+         * seek, so serialising them stalls playback; SMB doesn't need to. (§2)
+         */
+        val concurrentSafe: Boolean,
     )
 
     private var serverSocket: ServerSocket? = null
@@ -107,11 +115,18 @@ class SftpStreamServer @Inject constructor() : Closeable {
         size: Long,
         contentType: String = "application/octet-stream",
         opener: Opener,
+        concurrentSafe: Boolean = false,
     ): String {
         val key = path.trimStart('/').split('/').joinToString("/") {
             java.net.URLEncoder.encode(it, "UTF-8").replace("+", "%20")
         }
-        entries[key] = Entry(path = path, size = size, contentType = contentType, opener = opener)
+        entries[key] = Entry(
+            path = path,
+            size = size,
+            contentType = contentType,
+            opener = opener,
+            concurrentSafe = concurrentSafe,
+        )
         return "/$token/$key"
     }
 
@@ -217,29 +232,39 @@ class SftpStreamServer @Inject constructor() : Closeable {
                     return
                 }
 
-                synchronized(channelLock) {
-                    val stream = try {
-                        entry.opener.open(start)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "open ${entry.path}@$start failed", e)
-                        return
-                    }
-                    stream.use { inp ->
-                        val buf = ByteArray(64 * 1024)
-                        var remaining = length
-                        while (remaining > 0) {
-                            val want = minOf(buf.size.toLong(), remaining).toInt()
-                            val n = inp.read(buf, 0, want)
-                            if (n < 0) break
-                            out.write(buf, 0, n)
-                            remaining -= n
-                        }
-                        out.flush()
-                    }
+                // SFTP shares one channel → serialise body reads. SMB/local open
+                // an independent handle per request → serve them concurrently so
+                // an external player's parallel Range reads don't stall (§2).
+                if (entry.concurrentSafe) {
+                    streamBody(out, entry, start, length)
+                } else {
+                    synchronized(channelLock) { streamBody(out, entry, start, length) }
                 }
             }
         } catch (e: Exception) {
             Log.d(TAG, "client ended: ${e.message}")
+        }
+    }
+
+    /** Open the entry at [start] and copy [length] bytes to [out]. */
+    private fun streamBody(out: OutputStream, entry: Entry, start: Long, length: Long) {
+        val stream = try {
+            entry.opener.open(start)
+        } catch (e: Exception) {
+            Log.e(TAG, "open ${entry.path}@$start failed", e)
+            return
+        }
+        stream.use { inp ->
+            val buf = ByteArray(64 * 1024)
+            var remaining = length
+            while (remaining > 0) {
+                val want = minOf(buf.size.toLong(), remaining).toInt()
+                val n = inp.read(buf, 0, want)
+                if (n < 0) break
+                out.write(buf, 0, n)
+                remaining -= n
+            }
+            out.flush()
         }
     }
 
