@@ -4,7 +4,7 @@
 
 Haven is a **thin-client operating system for distributed compute, storage, and presence**. The pocket device in your hand is not the computer — it's the point of presence from which you reach the computers, the files, and the agents that do the work. Those computers and files are scattered: a workstation under the desk, a VM in a datacenter, a folder in Google Drive, a camera feed at home, a screen sharing something on the other side of the room. Haven is the single lens through which you see and operate on all of it.
 
-The last decade convinced us that "desktop" and "files" are local nouns. The next one undoes that. Storage lives on whatever is cheapest. Compute runs wherever the data is. Humans, phones, laptops, and AI agents all take turns driving the same shared workflow. Haven treats that world as the default case instead of the exception.
+The last decade convinced us that "desktop" and "files" are local nouns. The next one undoes that. Storage lives on whatever is cheapest. Compute runs wherever the data is. And a human and an AI agent now drive the same workflow together — sometimes in turn, often at once — across phones, laptops, and servers. **Haven's central design goal is to make that shared human-and-agent operation the primary case: the agent acting on the very surfaces the human is watching, through the same actions a tap performs, with the human always keeping the wheel.** Everything else — the four primitives below, the consent tiers, the self-hosting loop — exists to serve that goal. Haven treats this world as the default, not the exception.
 
 ## Identity
 
