@@ -110,11 +110,12 @@ fun ImportRcloneConfigDialog(
                         onClick = { viewModel.loadConfig(pasted) },
                         enabled = pasted.isNotBlank(),
                     ) { Text(stringRes(context, R.string.rclone_import_parse)) }
-                is RcloneConfigViewModel.ImportState.Done -> TextButton(onClick = ::close) { Text("Done") }
+                is RcloneConfigViewModel.ImportState.Done ->
+                    TextButton(onClick = ::close) { Text(stringRes(context, R.string.common_done)) }
                 else -> {}
             }
         },
-        dismissButton = { TextButton(onClick = ::close) { Text("Close") } },
+        dismissButton = { TextButton(onClick = ::close) { Text(stringRes(context, R.string.common_close)) } },
     )
 }
 
