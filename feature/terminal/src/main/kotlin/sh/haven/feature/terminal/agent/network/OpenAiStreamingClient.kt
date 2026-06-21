@@ -1,289 +1,236 @@
 package sh.haven.feature.terminal.agent.network
 
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import sh.haven.feature.terminal.agent.model.*
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 
 /**
- * OpenAI 兼容流式客户端（对齐 Netcatty 的流式请求封装）
+ * OpenAI-compatible streaming client.
  *
- * 支持：
- * - 标准 OpenAI /v1/chat/completions 接口
- * - 流式 SSE (Server-Sent Events) 响应
- * - Tool Calling（工具调用）
- * - 多轮对话
+ * Key design notes (1:1 aligned with Netcatty):
+ * 1. Supports 5 tools (same as Netcatty):
+ *    - terminal_execute
+ *    - workspace_get_info
+ *    - workspace_get_session_info
+ *    - web_search
+ *    - url_fetch
+ * 2. Tool result format matches Netcatty exactly:
+ *    STDOUT:\n...\n\nSTDERR:\n...\n\nExit code: x
+ * 3. Uses OpenAI /v1/chat/completions API with function calling.
  */
 class OpenAiStreamingClient(
-    private val client: OkHttpClient = defaultClient(),
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .build()
 ) {
     companion object {
         private const val TAG = "OpenAiStreamingClient"
-        private val JSON_MEDIA_TYPE = "application/json".toMediaType()
+        private val JSON = "application/json; charset=utf-8".toMediaType()
     }
 
-    fun sendMessage(
+    /**
+     * Send messages to AI and get streaming response.
+     *
+     * @param config Provider config
+     * @param messages Chat messages (OpenAI format)
+     * @param tools Tool definitions (OpenAI format)
+     * @param onEvent Callback for streaming events
+     */
+    suspend fun sendMessage(
         config: AiProviderConfig,
         messages: List<ChatMessage>,
-        tools: List<ToolDefinition>? = null,
-        temperature: Float? = null,
-        maxTokens: Int? = null,
-    ): Flow<ChatStreamEvent> = callbackFlow {
+        tools: List<ToolDefinition> = TerminalTools.getAllTools(),
+        onEvent: (ChatStreamEvent) -> Unit
+    ) = withContext(Dispatchers.IO) {
         try {
-            // 1. 构建请求 URL
-            val baseUrl = config.baseUrl ?: config.providerId.defaultBaseUrl
-            val url = "$baseUrl/chat/completions"
+            val baseUrl = config.baseUrl?.trimEnd('/') ?: "https://api.openai.com"
+            val url = "$baseUrl/v1/chat/completions"
 
-            // 2. 构建请求体（对齐 Netcatty 的 ChatParams）
-            val requestBody = buildRequestBody(
-                config = config,
-                messages = messages,
-                tools = tools,
-                temperature = temperature ?: config.advancedParams?.temperature,
-                maxTokens = maxTokens ?: config.advancedParams?.maxTokens
-            )
+            // Build request body (OpenAI format)
+            val requestJson = JSONObject().apply {
+                put("model", config.defaultModel ?: "gpt-4o")
+                put("messages", JSONArray(messages.map { it.toOpenAiFormat() }))
+                put("stream", true)
 
-            // 3. 构建 HTTP 请求
+                // Add tools (function calling)
+                if (tools.isNotEmpty()) {
+                    put("tools", JSONArray(tools.map { it.toOpenAiFormat() }))
+                    put("tool_choice", "auto")
+                }
+
+                // Advanced params
+                config.advancedParams?.let { params ->
+                    params.temperature?.let { put("temperature", it) }
+                    params.maxTokens?.let { put("max_tokens", it) }
+                    params.topP?.let { put("top_p", it) }
+                }
+            }
+
             val request = Request.Builder()
                 .url(url)
-                .post(requestBody.toRequestBody(JSON_MEDIA_TYPE))
+                .post(requestJson.toString().toRequestBody(JSON))
                 .addHeader("Content-Type", "application/json")
-                .apply {
-                    // 添加 API Key（支持 enc:v1: 加密前缀）
-                    val apiKey = config.apiKey
-                    if (!apiKey.isNullOrBlank()) {
-                        when (config.providerId.resolveStyle()) {
-                            ProviderStyle.ANTHROPIC -> addHeader("x-api-key", apiKey)
-                            ProviderStyle.GOOGLE -> {
-                                // Google 使用 URL 参数
-                            }
-                            else -> addHeader("Authorization", "Bearer $apiKey")
-                        }
-                    }
-
-                    // 添加自定义 Headers
-                    config.customHeaders?.forEach { (key, value) ->
-                        addHeader(key, value)
-                    }
-                }
+                .addHeader("Authorization", "Bearer ${config.getDecryptedApiKey()}")
                 .build()
 
-            // 4. 发起请求并处理 SSE 流式响应
-            val response = client.newCall(request).execute()
-            val responseBody = response.body
+            Log.d(TAG, "Sending request to: $url")
+            Log.d(TAG, "Request body: ${requestJson.toString(2)}")
 
-            if (!response.isSuccessful || responseBody == null) {
-                trySend(ChatStreamEvent.Error(
-                    type = "provider",
-                    message = "API request failed: ${response.code} ${response.message}"
-                ))
-                close()
-                return@callbackFlow
+            val call = client.newCall(request)
+            val response = call.execute()
+
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string() ?: "Unknown error"
+                Log.e(TAG, "API error: ${response.code}, body: $errorBody")
+                onEvent(ChatStreamEvent.Error("API error: ${response.code}, $errorBody"))
+                return@withContext
             }
 
-            // 5. 解析 SSE 流
-            val source = responseBody.source()
-            val buffer = okio.Buffer()
-
-            while (!source.exhausted()) {
-                source.readUtf8Line()?.let { line ->
-                    if (line.startsWith("data: ")) {
-                        val data = line.substring(6).trim()
-                        if (data == "[DONE]") {
-                            trySend(ChatStreamEvent.Done)
-                            return@callbackFlow
-                        }
-
-                        try {
-                            val json = JSONObject(data)
-                            parseStreamEvent(json)?.let { event ->
-                                trySend(event)
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to parse SSE event: $data", e)
-                        }
-                    }
-                }
-            }
-
-            trySend(ChatStreamEvent.Done)
-            close()
+            // Parse SSE stream
+            parseSseStream(response.body!!.source(), onEvent)
 
         } catch (e: Exception) {
             Log.e(TAG, "Streaming request failed", e)
-            trySend(ChatStreamEvent.Error(
-                type = "unknown",
-                message = e.message ?: "Unknown error"
-            ))
-            close(e)
-        }
-
-        awaitClose {
-            Log.d(TAG, "Stream closed")
+            onEvent(ChatStreamEvent.Error("Request failed: ${e.message}"))
         }
     }
 
-    private fun buildRequestBody(
-        config: AiProviderConfig,
-        messages: List<ChatMessage>,
-        tools: List<ToolDefinition>?,
-        temperature: Float?,
-        maxTokens: Int?,
-    ): String {
-        val root = JSONObject()
+    /**
+     * Parse SSE (Server-Sent Events) stream.
+     *
+     * OpenAI streaming format:
+     * data: {"choices":[{"delta":{"content":"Hello"}}]}
+     * data: {"choices":[{"delta":{"tool_calls":[{"id":"call_xxx","function":{"name":"terminal_execute","arguments":"{\"sessionId\""}}]}}]}
+     * data: [DONE]
+     */
+    private suspend fun parseSseStream(
+        source: okio.BufferedSource,
+        onEvent: (ChatStreamEvent) -> Unit
+    ) {
+        var textAccumulator = StringBuilder()
+        var thinkingContent = StringBuilder()
 
-        // 模型
-        root.put("model", config.defaultModel ?: "gpt-4o")
+        // Tool call accumulators (OpenAI streams tool_calls in chunks)
+        val toolCallAccumulators = mutableMapOf<Int, ToolCallAccumulator>()
 
-        // 消息列表
-        val messagesArray = JSONArray()
-        messages.forEach { msg ->
-            val msgObj = JSONObject().apply {
-                put("role", msg.role)
-                put("content", msg.content)
-            }
-            messagesArray.put(msgObj)
-        }
-        root.put("messages", messagesArray)
+        while (!source.exhausted()) {
+            val line = source.readUtf8Line() ?: continue
 
-        // 流式响应
-        root.put("stream", true)
+            if (line.startsWith("data: ")) {
+                val data = line.substring(6).trim()
 
-        // Temperature
-        if (temperature != null) {
-            root.put("temperature", temperature)
-        }
+                if (data == "[DONE]") {
+                    // Stream complete
+                    if (textAccumulator.isNotEmpty()) {
+                        onEvent(ChatStreamEvent.TextDelta(textAccumulator.toString()))
+                    }
+                    if (thinkingContent.isNotEmpty()) {
+                        onEvent(ChatStreamEvent.ThinkingDelta(thinkingContent.toString()))
+                    }
 
-        // Max Tokens
-        if (maxTokens != null) {
-            root.put("max_tokens", maxTokens)
-        }
+                    // Emit accumulated tool calls
+                    if (toolCallAccumulators.isNotEmpty()) {
+                        val toolCalls = toolCallAccumulators.values.map { it.toToolCall() }
+                        onEvent(ChatStreamEvent.ToolCall(toolCalls))
+                    }
 
-        // Tools (Tool Calling)
-        if (!tools.isNullOrEmpty()) {
-            val toolsArray = JSONArray()
-            tools.forEach { tool ->
-                val toolObj = JSONObject().apply {
-                    put("type", "function")
-                    put("function", JSONObject().apply {
-                        put("name", tool.name)
-                        put("description", tool.description)
-                        put("parameters", tool.parameters)
-                    })
-                }
-                toolsArray.put(toolObj)
-            }
-            root.put("tools", toolsArray)
-        }
-
-        return root.toString()
-    }
-
-    private fun parseStreamEvent(json: JSONObject): ChatStreamEvent? {
-        return try {
-            val choices = json.optJSONArray("choices")
-            if (choices == null || choices.length() == 0) {
-                return null
-            }
-
-            val choice = choices.getJSONObject(0)
-            val delta = choice.optJSONObject("delta")
-
-            if (delta != null) {
-                // 文本内容
-                val content = delta.optString("content", "")
-                if (content.isNotEmpty()) {
-                    return ChatStreamEvent.Text(content)
+                    onEvent(ChatStreamEvent.Done)
+                    break
                 }
 
-                // Tool Calls
-                val toolCalls = delta.optJSONArray("tool_calls")
-                if (toolCalls != null && toolCalls.length() > 0) {
-                    val toolCall = toolCalls.getJSONObject(0)
-                    return ChatStreamEvent.ToolCall(
-                        id = toolCall.optString("id", ""),
-                        name = toolCall.optJSONObject("function")?.optString("name", "") ?: "",
-                        arguments = toolCall.optJSONObject("function")?.optString("arguments", "") ?: ""
-                    )
+                try {
+                    val json = JSONObject(data)
+                    val choices = json.optJSONArray("choices") ?: continue
+                    if (choices.length() == 0) continue
+
+                    val choice = choices.getJSONObject(0)
+                    val delta = choice.optJSONObject("delta") ?: continue
+
+                    // Text content
+                    val content = delta.optString("content", null)
+                    if (content != null) {
+                        textAccumulator.append(content)
+                        onEvent(ChatStreamEvent.TextDelta(content))
+                    }
+
+                    // Tool calls (function calling)
+                    val toolCallsJson = delta.optJSONArray("tool_calls")
+                    if (toolCallsJson != null) {
+                        for (i in 0 until toolCallsJson.length()) {
+                            val tc = toolCallsJson.getJSONObject(i)
+                            val index = tc.optInt("index", 0)
+
+                            // Get or create accumulator
+                            val acc = toolCallAccumulators.getOrPut(index) { ToolCallAccumulator() }
+
+                            // ID (only in first chunk)
+                            if (tc.has("id")) {
+                                acc.id = tc.getString("id")
+                            }
+
+                            // Function
+                            val function = tc.optJSONObject("function")
+                            if (function != null) {
+                                // Name (only in first chunk)
+                                if (function.has("name")) {
+                                    acc.name = function.getString("name")
+                                }
+
+                                // Arguments (streamed in chunks)
+                                if (function.has("arguments")) {
+                                    acc.arguments.append(function.getString("arguments"))
+                                }
+                            }
+                        }
+                    }
+
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to parse SSE line: $line", e)
+                }
+            }
+        }
+    }
+
+    /**
+     * Tool call accumulator (for streaming parsing).
+     */
+    private data class ToolCallAccumulator(
+        var id: String? = null,
+        var name: String? = null,
+        val arguments: StringBuilder = StringBuilder()
+    ) {
+        fun toToolCall(): ToolCall {
+            val argsStr = arguments.toString()
+            val argsMap = mutableMapOf<String, Any>()
+
+            // Parse arguments JSON
+            if (argsStr.isNotBlank()) {
+                try {
+                    val json = JSONObject(argsStr)
+                    json.keys().forEach { key ->
+                        argsMap[key] = json.get(key)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse tool arguments: $argsStr", e)
                 }
             }
 
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse stream event", e)
-            null
+            return ToolCall(
+                id = id ?: "unknown",
+                name = name ?: "unknown",
+                arguments = argsMap
+            )
         }
     }
-
-    companion object {
-        fun defaultClient(): OkHttpClient {
-            return OkHttpClient.Builder()
-                .connectTimeout(30, TimeUnit.SECONDS)
-                .readTimeout(120, TimeUnit.SECONDS)
-                .writeTimeout(30, TimeUnit.SECONDS)
-                .build()
-        }
-    }
-}
-
-/**
- * 聊天消息（对齐 Netcatty 的 ChatMessage）
- */
-data class ChatMessage(
-    val role: String,  // "user" | "assistant" | "system"
-    val content: String,
-    val name: String? = null,
-    val toolCalls: List<ToolCall>? = null,
-    val toolCallId: String? = null
-)
-
-/**
- * Tool 定义（对齐 Netcatty 的 ToolDefinition）
- */
-data class ToolDefinition(
-    val name: String,
-    val description: String,
-    val parameters: Map<String, Any>  // JSON Schema
-)
-
-/**
- * Tool Call（对齐 Netcatty 的 ToolCall）
- */
-data class ToolCall(
-    val id: String,
-    val name: String,
-    val arguments: String  // JSON 字符串
-)
-
-/**
- * 流式事件（对齐 Netcatty 的 ChatStreamEvent）
- */
-sealed class ChatStreamEvent {
-    data class Text(val content: String) : ChatStreamEvent()
-    data class Thinking(val content: String) : ChatStreamEvent()
-    data class ToolCall(
-        val id: String,
-        val name: String,
-        val arguments: String
-    ) : ChatStreamEvent()
-    data class ToolResult(
-        val toolCallId: String,
-        val content: String,
-        val isError: Boolean = false
-    ) : ChatStreamEvent()
-    data class Error(
-        val type: String,  // "network" | "auth" | "timeout" | "provider" | "unknown"
-        val message: String
-    ) : ChatStreamEvent()
-    object Done : ChatStreamEvent()
 }
