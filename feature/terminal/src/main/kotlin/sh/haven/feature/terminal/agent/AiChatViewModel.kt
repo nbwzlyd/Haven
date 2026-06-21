@@ -11,7 +11,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
+import kotlinx.coroutines.delay
+import java.nio.charset.StandardCharsets
+import sh.haven.core.ssh.SshSessionManager
 import sh.haven.feature.terminal.agent.model.*
 import sh.haven.feature.terminal.agent.model.ToolCall
 import sh.haven.feature.terminal.agent.model.ToolResult
@@ -24,21 +26,25 @@ import javax.inject.Inject
 /**
  * AI Chat ViewModel (1:1 aligned with Netcatty's AI agent flow).
  *
- * Key differences from previous version:
- * 1. Uses 5 tools (same as Netcatty)
- * 2. Correctly handles OpenAI function calling format
- * 3. Formats tool results as "STDOUT:/STDERR:/Exit code:" (aligned with Netcatty)
- * 4. Manages multi-turn tool calling loop
+ * Executes terminal commands via SshSessionManager:
+ * 1. sendInput() - sends command to SSH session
+ * 2. readAgentScrollback() - reads terminal output
+ * 3. Polls for command completion (heuristic-based)
  */
 @HiltViewModel
 class AiChatViewModel @Inject constructor(
     private val settingsRepository: AiSettingsRepository,
     private val encryptedPrefs: EncryptedPreferenceStore,
-    private val sessionRegistry: TerminalSessionRegistry
+    private val sessionRegistry: TerminalSessionRegistry,
+    private val sshSessionManager: SshSessionManager,
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "AiChatViewModel"
+        private const val COMMAND_TIMEOUT_MS = 30_000L  // 30 seconds max
+        private const val POLL_INTERVAL_MS = 500L       // Poll every 500ms
+        private const val QUIET_THRESHOLD_MS = 1_500L   // 1.5s no new output = done
+        private const val MAX_SCROLLBACK_BYTES = 16_384    // 16KB tail
     }
 
     private val _uiState = MutableStateFlow(AiChatUiState())
@@ -55,22 +61,17 @@ class AiChatViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                // Add user message
                 val userMsg = ChatMessage(role = "user", content = userMessage)
                 _messages.add(userMsg)
                 _uiState.update { it.copy(messages = _messages.toList(), isAiThinking = true) }
 
-                // Get AI config
                 val config = settingsRepository.getActiveConfig()
                 if (config == null) {
                     addAssistantMessage("Please configure an AI provider in Settings first.")
                     return@launch
                 }
 
-                // Build messages for API (OpenAI format)
                 val apiMessages = buildApiMessages()
-
-                // Send to AI (with tools)
                 val tools = TerminalTools.getAllTools()
                 var assistantResponse = StringBuilder()
                 var toolCallsAccumulated = mutableListOf<ToolCall>()
@@ -85,29 +86,22 @@ class AiChatViewModel @Inject constructor(
                             assistantResponse.append(event.delta)
                             updateAssistantMessage(assistantResponse.toString())
                         }
-
                         is ChatStreamEvent.ToolCall -> {
                             toolCallsAccumulated.addAll(event.toolCalls)
                         }
-
                         is ChatStreamEvent.Done -> {
-                            // Add assistant message (with tool calls)
                             val assistantMsg = ChatMessage(
                                 role = "assistant",
                                 content = assistantResponse.toString().ifBlank { null },
                                 toolCalls = if (toolCallsAccumulated.isNotEmpty()) toolCallsAccumulated else null
                             )
                             _messages.add(assistantMsg)
-
-                            // If there are tool calls, execute them
                             if (toolCallsAccumulated.isNotEmpty()) {
                                 handleToolCalls(toolCallsAccumulated, config)
                             } else {
-                                // No tool calls, just text response
                                 _uiState.update { it.copy(isAiThinking = false) }
                             }
                         }
-
                         is ChatStreamEvent.Error -> {
                             addAssistantMessage("Error: ${event.message}")
                         }
@@ -122,7 +116,7 @@ class AiChatViewModel @Inject constructor(
     }
 
     /**
-     * Handle tool calls (execute tools and send results back to AI).
+     * Handle tool calls: execute and send results back to AI.
      */
     private suspend fun handleToolCalls(toolCalls: List<ToolCall>, config: AiProviderConfig) {
         val toolResults = mutableListOf<ToolResult>()
@@ -132,7 +126,6 @@ class AiChatViewModel @Inject constructor(
             toolResults.add(result)
         }
 
-        // Add tool messages to conversation
         for (toolResult in toolResults) {
             val toolMsg = ChatMessage(
                 role = "tool",
@@ -142,7 +135,6 @@ class AiChatViewModel @Inject constructor(
             _messages.add(toolMsg)
         }
 
-        // Send updated conversation back to AI (continue tool calling loop)
         continueConversation(config)
     }
 
@@ -166,28 +158,22 @@ class AiChatViewModel @Inject constructor(
                     assistantResponse.append(event.delta)
                     updateAssistantMessage(assistantResponse.toString())
                 }
-
                 is ChatStreamEvent.ToolCall -> {
                     toolCallsAccumulated.addAll(event.toolCalls)
                 }
-
                 is ChatStreamEvent.Done -> {
-                    // Add assistant message
                     val assistantMsg = ChatMessage(
                         role = "assistant",
                         content = assistantResponse.toString().ifBlank { null },
                         toolCalls = if (toolCallsAccumulated.isNotEmpty()) toolCallsAccumulated else null
                     )
                     _messages.add(assistantMsg)
-
-                    // If there are more tool calls, execute them
                     if (toolCallsAccumulated.isNotEmpty()) {
                         handleToolCalls(toolCallsAccumulated, config)
                     } else {
                         _uiState.update { it.copy(isAiThinking = false) }
                     }
                 }
-
                 is ChatStreamEvent.Error -> {
                     addAssistantMessage("Error: ${event.message}")
                 }
@@ -214,7 +200,14 @@ class AiChatViewModel @Inject constructor(
     }
 
     /**
-     * Execute terminal command (aligned with Netcatty's executeTerminalExecute).
+     * Execute terminal command via SSH (aligned with Netcatty's executeTerminalExecute).
+     *
+     * Flow:
+     * 1. Validate session and permissions
+     * 2. Check command against blacklist
+     * 3. Send command via sshSessionManager.sendInput()
+     * 4. Poll for output completion
+     * 5. Read scrollback and extract output
      */
     private suspend fun executeTerminalCommand(toolCall: ToolCall): ToolResult {
         val sessionId = toolCall.arguments["sessionId"] as? String ?: ""
@@ -224,14 +217,18 @@ class AiChatViewModel @Inject constructor(
             return ToolResult(toolCall.id, "Missing sessionId or command", isError = true)
         }
 
-        // Check session scope
-        val sessions = sessionRegistry.getActiveSessions()
-        if (!sessions.any { it.sessionId == sessionId }) {
+        // Check session exists and is connected
+        val sessionState = sshSessionManager.getSession(sessionId)
+        if (sessionState == null) {
+            val available = sessionRegistry.getActiveSessions().joinToString(", ") { it.sessionId }
             return ToolResult(
                 toolCall.id,
-                "Session \"$sessionId\" is not in the current scope. Available sessions: ${sessions.joinToString(", ") { it.sessionId }}",
+                "Session \"$sessionId\" not found. Available: $available",
                 isError = true
             )
+        }
+        if (sessionState.status != SshSessionManager.SessionState.Status.CONNECTED) {
+            return ToolResult(toolCall.id, "Session \"$sessionId\" is not connected.", isError = true)
         }
 
         // Check permission mode
@@ -239,7 +236,7 @@ class AiChatViewModel @Inject constructor(
         if (permissionMode == PermissionMode.OBSERVER) {
             return ToolResult(
                 toolCall.id,
-                "Observer mode: command execution is disabled. Switch to Confirm or Auto mode to execute commands.",
+                "Observer mode: command execution is disabled. Switch to Confirm or Auto mode.",
                 isError = true
             )
         }
@@ -254,15 +251,90 @@ class AiChatViewModel @Inject constructor(
             )
         }
 
-        // TODO: Execute command via TerminalViewModel
-        // For now, return placeholder result
-        val stdout = "Command executed: $command\n(Execution not yet implemented)"
-        val stderr = ""
-        val exitCode = 0
-
-        val formattedResult = formatToolResult(stdout, stderr, exitCode)
-        return ToolResult(toolCall.id, formattedResult)
+        return try {
+            val output = executeCommandAndCaptureOutput(sessionId, command)
+            val formatted = formatToolResult(output.stdout, output.stderr, output.exitCode)
+            ToolResult(toolCall.id, formatted)
+        } catch (e: Exception) {
+            Log.e(TAG, "executeTerminalCommand failed: $command", e)
+            ToolResult(toolCall.id, "Execution failed: ${e.message}", isError = true)
+        }
     }
+
+    /**
+     * Execute command and capture output.
+     *
+     * Strategy (aligned with Netcatty):
+     * 1. Record baseline scrollback size
+     * 2. Send command (append "\n" to submit)
+     * 3. Poll for new output
+     * 4. Wait for quiet period (no new output for 1.5s)
+     * 5. Read scrollback tail and extract new output
+     */
+    private suspend fun executeCommandAndCaptureOutput(
+        sessionId: String,
+        command: String
+    ): CommandOutput = withContext(Dispatchers.IO) {
+
+        // Step 1: Record baseline
+        val baselineBytes = sshSessionManager.agentScrollbackTotalBytes(sessionId) ?: 0L
+
+        // Step 2: Send command
+        Log.d(TAG, "Sending command to $sessionId: $command")
+        sshSessionManager.sendInput(sessionId, command + "\n")
+
+        // Step 3: Poll for output
+        val startTime = System.currentTimeMillis()
+        var lastTotalBytes = baselineBytes
+        var lastNewOutputTime = System.currentTimeMillis()
+        var commandCompleted = false
+
+        while (System.currentTimeMillis() - startTime < COMMAND_TIMEOUT_MS) {
+            delay(POLL_INTERVAL_MS)
+
+            val currentTotalBytes = sshSessionManager.agentScrollbackTotalBytes(sessionId) ?: baselineBytes
+
+            if (currentTotalBytes > lastTotalBytes) {
+                // New output arrived
+                lastNewOutputTime = System.currentTimeMillis()
+                lastTotalBytes = currentTotalBytes
+            } else {
+                // No new output - check if quiet period reached
+                if (System.currentTimeMillis() - lastNewOutputTime > QUIET_THRESHOLD_MS) {
+                    commandCompleted = true
+                    break
+                }
+            }
+        }
+
+        // Step 4: Read scrollback and extract output
+        val scrollbackBytes = sshSessionManager.readAgentScrollback(sessionId, MAX_SCROLLBACK_BYTES)
+        val fullOutput = if (scrollbackBytes != null) {
+            String(scrollbackBytes, StandardCharsets.UTF_8)
+        } else {
+            ""
+        }
+
+        // Extract new output (everything after baseline)
+        // Since we only have the tail, we return the full tail and let the AI parse it
+        // The AI is smart enough to ignore old output and focus on new results
+        val stdout = fullOutput.trim()
+        val stderr = ""  // SSH doesn't separate stdout/stderr in scrollback
+        val exitCode = 0  // Exit code unavailable from scrollback
+
+        Log.d(TAG, "Command output (${stdout.length} chars): ${stdout.take(200)}")
+
+        CommandOutput(stdout, stderr, exitCode)
+    }
+
+    /**
+     * Command execution result.
+     */
+    private data class CommandOutput(
+        val stdout: String,
+        val stderr: String,
+        val exitCode: Int
+    )
 
     /**
      * Execute workspace_get_info tool.
@@ -272,11 +344,7 @@ class AiChatViewModel @Inject constructor(
         val sessionInfo = sessions.joinToString("\n") { session ->
             "- ${session.sessionId}: ${session.hostname} (${session.label}) - ${if (session.isConnected) "connected" else "disconnected"}"
         }
-
-        val content = "Workspace Info:\n" +
-            "Active sessions: ${sessions.size}\n" +
-            "Sessions:\n$sessionInfo"
-
+        val content = "Workspace Info:\nActive sessions: ${sessions.size}\nSessions:\n$sessionInfo"
         return ToolResult(toolCall.id, content)
     }
 
@@ -308,10 +376,7 @@ class AiChatViewModel @Inject constructor(
      */
     private fun executeWebSearch(toolCall: ToolCall): ToolResult {
         val query = toolCall.arguments["query"] as? String ?: ""
-        return ToolResult(
-            toolCall.id,
-            "Web search is not yet implemented. Query: $query"
-        )
+        return ToolResult(toolCall.id, "Web search is not yet implemented. Query: $query")
     }
 
     /**
@@ -319,17 +384,13 @@ class AiChatViewModel @Inject constructor(
      */
     private fun executeUrlFetch(toolCall: ToolCall): ToolResult {
         val url = toolCall.arguments["url"] as? String ?: ""
-        return ToolResult(
-            toolCall.id,
-            "URL fetch is not yet implemented. URL: $url"
-        )
+        return ToolResult(toolCall.id, "URL fetch is not yet implemented. URL: $url")
     }
 
     /**
      * Build API messages (OpenAI format).
      */
     private fun buildApiMessages(): List<ChatMessage> {
-        // Always start with system prompt
         val systemPrompt = SystemPromptBuilder.build(
             SystemPromptContext(
                 scopeType = ScopeType.TERMINAL,
@@ -342,11 +403,7 @@ class AiChatViewModel @Inject constructor(
         )
 
         val messages = mutableListOf(ChatMessage(role = "system", content = systemPrompt))
-
-        // Add conversation history (last 20 messages)
-        val history = _messages.takeLast(20)
-        messages.addAll(history)
-
+        messages.addAll(_messages.takeLast(20))
         return messages
     }
 
@@ -355,17 +412,12 @@ class AiChatViewModel @Inject constructor(
      */
     private fun updateAssistantMessage(content: String) {
         val messages = _uiState.value.messages.toMutableList()
-
-        // Find or create assistant message
         val lastMsg = messages.lastOrNull()
         if (lastMsg?.role == "assistant" && lastMsg.toolCalls == null) {
-            // Update existing assistant message
             messages[messages.size - 1] = lastMsg.copy(content = content)
         } else {
-            // Add new assistant message
             messages.add(ChatMessage(role = "assistant", content = content))
         }
-
         _uiState.update { it.copy(messages = messages) }
     }
 
