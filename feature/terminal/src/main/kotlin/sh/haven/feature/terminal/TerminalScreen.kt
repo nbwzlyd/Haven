@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -74,6 +75,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -187,6 +189,7 @@ fun TerminalScreen(
      * the pager animation; this screen just signals intent.
      */
     onNavigateToSftp: () -> Unit = {},
+    onNavigateToAiChat: () -> Unit = {},
     viewModel: TerminalViewModel = hiltViewModel(),
 ) {
     var reorderMode by remember { mutableStateOf(false) }
@@ -543,6 +546,7 @@ fun TerminalScreen(
     val terminalFg: Color = if (activeTabScheme.isDynamic) MaterialTheme.colorScheme.onSurface
         else Color(activeTabScheme.foreground)
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (tabs.isEmpty()) {
             EmptyTerminalState(
@@ -1225,10 +1229,28 @@ fun TerminalScreen(
                     )
                 }
             }
+    }
+
+    // AI Agent FAB
+    if (tabs.isNotEmpty() && !terminalFullscreen) {
+        FloatingActionButton(
+            onClick = onNavigateToAiChat,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ) {
+            Icon(
+                Icons.Filled.SmartToy,
+                contentDescription = "AI Agent",
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
         }
     }
-}
 
+    // AI Chat overlay
+    if    }
+}
 @Composable
 private fun EmptyTerminalState(
     fontSize: Int,

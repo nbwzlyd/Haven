@@ -107,6 +107,9 @@ fun HavenNavHost(
     // surfaces render the same screen.
     var showAgentActivityOverlay by remember { mutableStateOf(false) }
 
+    // AI Agent chat overlay — opened by the FAB on the Terminal screen.
+    var showAiChat by remember { mutableStateOf(false) }
+
     // Native Wayland desktop — poll compositor state reactively
     var waylandRunning by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -634,6 +637,7 @@ fun HavenNavHost(
                                 requestScreen(Screen.Sftp)
                             }
                         },
+                        onNavigateToAiChat = { showAiChat = true },
                         terminalModifier = Modifier.pagerSwipeOverride(
                             pagerState, coroutineScope,
                             isSelectionActive = { terminalSelectionActive || terminalReorderMode },
@@ -947,6 +951,13 @@ fun HavenNavHost(
     if (showAgentActivityOverlay) {
         sh.haven.feature.settings.AgentActivityScreen(
             onBack = { showAgentActivityOverlay = false },
+        )
+    }
+
+    // AI Agent chat overlay — opened by the FAB on the Terminal screen.
+    if (showAiChat) {
+        sh.haven.feature.terminal.agent.ui.AiChatScreen(
+            onNavigateBack = { showAiChat = false },
         )
     }
 }
