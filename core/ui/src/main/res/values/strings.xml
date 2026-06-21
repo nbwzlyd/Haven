@@ -38,4 +38,44 @@
     <string name="common_github">GitHub</string>
     <string name="common_support">Support</string>
     <string name="common_unlock">Unlock</string>
+
+    <!-- Agent Chat -->
+    <string name="agent_title">AI Agent</string>
+    <string name="agent_chat_hint">Ask me to help with server management...</string>
+    <string name="agent_you">You</string>
+    <string name="agent_assistant">AI Assistant</string>
+    <string name="agent_thinking">Thinking...</string>
+    <string name="agent_welcome_title">Welcome to AI Agent</string>
+    <string name="agent_welcome_subtitle">I can help you manage servers using natural language</string>
+    <string name="agent_try_examples">Try asking:</string>
+    <string name="agent_example_1">Check disk usage</string>
+    <string name="agent_example_2">Show running processes</string>
+    <string name="agent_example_3">Analyze error logs</string>
+    <string name="agent_command_approval_title">Command Approval Required</string>
+    <string name="agent_command_approval_message">The AI wants to execute the following command:</string>
+    <string name="agent_command_deny">Deny</string>
+    <string name="agent_command_approve">Approve</string>
+    <string name="agent_command_executing_title">Executing Command</string>
+    <string name="agent_command_executing_message">Please wait while the command is being executed...</string>
+    <string name="agent_command_result_title">Command Result</string>
+    <string name="agent_command_label">Command:</string>
+    <string name="agent_result_label">Result:</string>
+    <string name="agent_error_no_api_key">Please configure AI API key in settings</string>
+    <string name="agent_error_network">Network error. Please check your connection.</string>
+    <string name="agent_error_api">API error. Please check your configuration.</string>
+    <string name="clear_chat">Clear Chat</string>
+    <string name="back">Back</string>
+    <string name="send">Send</string>
+    <string name="agent_settings">AI Settings</string>
+    <string name="agent_provider">AI Provider</string>
+    <string name="agent_api_key">API Key</string>
+    <string name="agent_base_url">Base URL</string>
+    <string name="agent_model">Model</string>
+    <string name="agent_temperature">Temperature</string>
+    <string name="agent_max_tokens">Max Tokens</string>
+    <string name="agent_permission_mode">Permission Mode</string>
+    <string name="agent_permission_observer">Observer (Read-only)</string>
+    <string name="agent_permission_confirm">Confirm (Require approval)</string>
+    <string name="agent_permission_autonomous">Autonomous (Auto-execute)</string>
+    <string name="agent_blacklist_warning">This command matches the security blacklist and will be executed with caution.</string>
 </resources>

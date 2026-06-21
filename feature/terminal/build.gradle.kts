@@ -60,6 +60,15 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.coroutines.test)
+
+    // AI Agent - OkHttp for API calls
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    
+    // AI Agent - Encrypted storage for API keys
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    
+    // AI Agent - JSON parsing
+    implementation("org.json:json:20240303")
 }
 
 kotlin {

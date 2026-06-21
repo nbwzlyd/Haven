@@ -1,119 +1,144 @@
 package sh.haven.feature.terminal.agent
 
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import org.connectbot.terminal.GestureInjector
-import org.connectbot.terminal.ScrollController
-import org.connectbot.terminal.SelectionController
-import org.connectbot.terminal.TerminalEmulator
-import sh.haven.feature.terminal.OscHandler
-import javax.inject.Inject
-import javax.inject.Singleton
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 
 /**
- * Singleton index of live terminal handles by sessionId. Populated by
- * [sh.haven.feature.terminal.TerminalViewModel] when a tab is created
- * and by [sh.haven.feature.terminal.TerminalScreen] when its Compose
- * scope acquires the per-Composition controllers (selection, scroll).
+ * 终端会话注册器（对齐 Netcatty 的会话管理）
  *
- * Exists so the MCP transport (`app/.../agent/McpTools.kt`) can read
- * and drive the terminal without going through a Compose scope: the
- * registry is the bridge between the agent thread and the controllers
- * that only exist while the Terminal composable is in the tree.
+ * 功能：
+ * 1. 注册/注销终端会话
+ * 2. 跟踪活跃会话
+ * 3. 提供会话上下文给 AI Agent
+ * 4. 不修改 Haven 原有终端代码，仅作为观察者
  *
- * Entries persist while the tab is open; they are cleared when the
- * tab is closed (TerminalViewModel) and the controller fields are
- * cleared/repopulated as the Composable enters/leaves the tree.
+ * 注意：这个类不直接操作终端，而是通过 Haven 的 TerminalViewModel 获取会话信息
  */
-@Singleton
-class TerminalSessionRegistry @Inject constructor() {
+class TerminalSessionRegistry {
+    companion object {
+        private const val TAG = "TerminalSessionRegistry"
+    }
+
+    // 活跃会话列表
+    private val _activeSessions = MutableStateFlow<List<TerminalSessionInfo>>(emptyList())
+    val activeSessions: StateFlow<List<TerminalSessionInfo>> = _activeSessions.asStateFlow()
+
+    // 当前活跃会话 ID
+    private val _activeSessionId = MutableStateFlow<String?>(null)
+    val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
 
     /**
-     * Snapshot of one tab's agent-reachable handles. The emulator is
-     * always present (created with the tab); selection/scroll are null
-     * until the tab's Composable mounts and its callbacks fire.
+     * 注册终端会话（由 TerminalViewModel 调用）
      *
-     * The remaining fields are populated by [setAgentHandles] from
-     * TerminalViewModel's tab-sync loop. They stay null for headless
-     * agent shells (which have no OSC handler / mouse tracker / output
-     * pipeline of their own) — callers must null-check.
-     *
-     * @param mouseMode true while the remote app has any xterm mouse
-     *        mode (1000/1002/1003) active.
-     * @param activeMouseMode the highest active mouse mode number, or null.
-     * @param bracketPasteMode true while bracketed-paste mode (2004) is on.
-     * @param oscHandler the per-tab OSC scanner; exposes last-seen OSC
-     *        events for test assertions.
-     * @param feedOutput injects raw bytes through the tab's real output
-     *        pipeline (OSC scan → mouse-mode scan → emulator), exactly as
-     *        if the bytes had arrived from the remote.
-     * @param gestureInjector drives synthetic touch gestures through the
-     *        terminal's real pointer pipeline; null until the tab's
-     *        Composable mounts (set via [setGestureInjector]).
+     * @param sessionInfo 会话信息
      */
-    data class Entry(
-        val emulator: TerminalEmulator,
-        val selectionController: SelectionController? = null,
-        val scrollController: ScrollController? = null,
-        val mouseMode: StateFlow<Boolean>? = null,
-        val activeMouseMode: StateFlow<Int?>? = null,
-        val bracketPasteMode: StateFlow<Boolean>? = null,
-        val oscHandler: OscHandler? = null,
-        val feedOutput: ((ByteArray, Int, Int) -> Unit)? = null,
-        val gestureInjector: GestureInjector? = null,
-    )
-
-    private val _sessions = MutableStateFlow<Map<String, Entry>>(emptyMap())
-    val sessions: StateFlow<Map<String, Entry>> = _sessions
-
-    fun register(sessionId: String, emulator: TerminalEmulator) {
-        _sessions.value = _sessions.value + (sessionId to Entry(emulator))
-    }
-
-    fun setSelectionController(sessionId: String, controller: SelectionController?) {
-        val current = _sessions.value[sessionId] ?: return
-        _sessions.value = _sessions.value + (sessionId to current.copy(selectionController = controller))
-    }
-
-    fun setScrollController(sessionId: String, controller: ScrollController?) {
-        val current = _sessions.value[sessionId] ?: return
-        _sessions.value = _sessions.value + (sessionId to current.copy(scrollController = controller))
-    }
-
-    fun setGestureInjector(sessionId: String, injector: GestureInjector?) {
-        val current = _sessions.value[sessionId] ?: return
-        _sessions.value = _sessions.value + (sessionId to current.copy(gestureInjector = injector))
+    fun registerSession(sessionInfo: TerminalSessionInfo) {
+        val current = _activeSessions.value.toMutableList()
+        val existing = current.indexOfFirst { it.id == sessionInfo.id }
+        if (existing >= 0) {
+            current[existing] = sessionInfo
+        } else {
+            current.add(sessionInfo)
+        }
+        _activeSessions.value = current
+        Log.d(TAG, "Registered session: ${sessionInfo.id}")
     }
 
     /**
-     * Attach the tab-owned handles used by the agent test tools
-     * (mouse-mode flows, OSC handler, raw-output pipeline). Called from
-     * TerminalViewModel's tab-sync loop once per tab; a no-op if the
-     * session isn't registered yet.
+     * 注销终端会话
+     *
+     * @param sessionId 会话 ID
      */
-    fun setAgentHandles(
-        sessionId: String,
-        mouseMode: StateFlow<Boolean>,
-        activeMouseMode: StateFlow<Int?>,
-        bracketPasteMode: StateFlow<Boolean>,
-        oscHandler: OscHandler,
-        feedOutput: (ByteArray, Int, Int) -> Unit,
-    ) {
-        val current = _sessions.value[sessionId] ?: return
-        _sessions.value = _sessions.value + (
-            sessionId to current.copy(
-                mouseMode = mouseMode,
-                activeMouseMode = activeMouseMode,
-                bracketPasteMode = bracketPasteMode,
-                oscHandler = oscHandler,
-                feedOutput = feedOutput,
-            )
-            )
+    fun unregisterSession(sessionId: String) {
+        val current = _activeSessions.value.toMutableList()
+        current.removeAll { it.id == sessionId }
+        _activeSessions.value = current
+
+        // 如果注销的是当前活跃会话，清空活跃状态
+        if (_activeSessionId.value == sessionId) {
+            _activeSessionId.value = current.firstOrNull()?.id
+        }
+
+        Log.d(TAG, "Unregistered session: $sessionId")
     }
 
-    fun unregister(sessionId: String) {
-        _sessions.value = _sessions.value - sessionId
+    /**
+     * 更新会话连接状态
+     *
+     * @param sessionId 会话 ID
+     * @param connected 是否连接
+     */
+    fun updateConnectionStatus(sessionId: String, connected: Boolean) {
+        val current = _activeSessions.value.toMutableList()
+        val index = current.indexOfFirst { it.id == sessionId }
+        if (index >= 0) {
+            current[index] = current[index].copy(isConnected = connected)
+            _activeSessions.value = current
+        }
     }
 
-    fun get(sessionId: String): Entry? = _sessions.value[sessionId]
+    /**
+     * 设置当前活跃会话
+     *
+     * @param sessionId 会话 ID
+     */
+    fun setActiveSession(sessionId: String?) {
+        _activeSessionId.value = sessionId
+        Log.d(TAG, "Active session set to: $sessionId")
+    }
+
+    /**
+     * 获取当前活跃会话 ID
+     */
+    fun getActiveSessionId(): String? {
+        return _activeSessionId.value
+    }
+
+    /**
+     * 获取当前活跃会话信息
+     */
+    fun getActiveSession(): TerminalSessionInfo? {
+        val sessionId = _activeSessionId.value ?: return null
+        return _activeSessions.value.find { it.id == sessionId }
+    }
+
+    /**
+     * 获取所有活跃会话
+     */
+    fun getActiveSessions(): List<TerminalSessionInfo> {
+        return _activeSessions.value.filter { it.isConnected }
+    }
+
+    /**
+     * 清除所有会话
+     */
+    fun clearAll() {
+        _activeSessions.value = emptyList()
+        _activeSessionId.value = null
+        Log.d(TAG, "Cleared all sessions")
+    }
 }
+
+/**
+ * 终端会话信息（简化版，仅包含 AI Agent 需要的信息）
+ *
+ * 注意：这个类不操作终端，仅作为数据容器
+ */
+data class TerminalSessionInfo(
+    val id: String,
+    val hostname: String? = null,
+    val label: String? = null,
+    val os: String? = null,
+    val username: String? = null,
+    val protocol: String? = null,
+    val shellType: String? = null,
+    val deviceType: String? = null,
+    val isConnected: Boolean = false,
+    val currentWorkingDirectory: String? = null,
+    val lastCommand: String? = null,
+)
