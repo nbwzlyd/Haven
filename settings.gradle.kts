@@ -133,5 +133,6 @@ include(":feature:editor")
 include(":feature:imagetools")
 include(":feature:vnc")
 include(":feature:rdp")
+include(":feature:agent")
 
 include(":integration-tests")

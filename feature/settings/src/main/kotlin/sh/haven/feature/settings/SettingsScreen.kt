@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.filled.LockReset
@@ -181,6 +182,12 @@ fun SettingsScreen(
     val verboseLoggingEnabled by viewModel.verboseLoggingEnabled.collectAsState()
     val mcpAgentEndpointEnabled by viewModel.mcpAgentEndpointEnabled.collectAsState()
     val agentAllowFileRead by viewModel.agentAllowFileRead.collectAsState()
+    val cattyAgentApiKey by viewModel.cattyAgentApiKey.collectAsState()
+    val cattyAgentBaseUrl by viewModel.cattyAgentBaseUrl.collectAsState()
+    val cattyAgentModel by viewModel.cattyAgentModel.collectAsState()
+    val cattyAgentPermissionMode by viewModel.cattyAgentPermissionMode.collectAsState()
+    val cattyAgentMaxIterations by viewModel.cattyAgentMaxIterations.collectAsState()
+    val cattyAgentCommandTimeout by viewModel.cattyAgentCommandTimeout.collectAsState()
     val unseenAgentActivity by viewModel.unseenAgentActivity.collectAsState()
     val requireAgentConsentForWrites by viewModel.requireAgentConsentForWrites.collectAsState()
     val mouseInputEnabled by viewModel.mouseInputEnabled.collectAsState()
@@ -214,6 +221,7 @@ fun SettingsScreen(
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showWaylandShellDialog by remember { mutableStateOf(false) }
     var showMediaExtensionsDialog by remember { mutableStateOf(false) }
+    var showCattyAgentConfigDialog by remember { mutableStateOf(false) }
     var showFontSizeDialog by remember { mutableStateOf(false) }
     var showScrollbackRowsDialog by remember { mutableStateOf(false) }
     var showSessionManagerDialog by remember { mutableStateOf(false) }
@@ -1091,6 +1099,18 @@ fun SettingsScreen(
             )
         }
 
+        // ---- Catty Agent (outbound AI agent) ----
+        // Distinct from the MCP endpoint above: MCP is an *inbound* server
+        // (external agents call Haven). Catty Agent is *outbound* — Haven
+        // calls an LLM and drives the terminal itself. Grouped here because
+        // both are "AI agent" surfaces the user will look for together.
+        SettingsItem(
+            icon = Icons.Filled.SmartToy,
+            title = stringResource(R.string.agent_config_section),
+            subtitle = stringResource(R.string.agent_config_section_summary),
+            onClick = { showCattyAgentConfigDialog = true },
+        )
+
         SettingsItem(
             icon = Icons.Filled.PlayArrow,
             title = stringResource(R.string.settings_media_extensions_title),
@@ -1360,6 +1380,24 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = { showWaylandShellDialog = false }) { Text(stringResource(R.string.common_cancel)) }
             },
+        )
+    }
+
+    if (showCattyAgentConfigDialog) {
+        CattyAgentConfigDialog(
+            apiKey = cattyAgentApiKey,
+            baseUrl = cattyAgentBaseUrl,
+            model = cattyAgentModel,
+            permissionMode = cattyAgentPermissionMode,
+            maxIterations = cattyAgentMaxIterations,
+            commandTimeout = cattyAgentCommandTimeout,
+            onApiKeyChange = viewModel::setCattyAgentApiKey,
+            onBaseUrlChange = viewModel::setCattyAgentBaseUrl,
+            onModelChange = viewModel::setCattyAgentModel,
+            onPermissionModeChange = viewModel::setCattyAgentPermissionMode,
+            onMaxIterationsChange = viewModel::setCattyAgentMaxIterations,
+            onCommandTimeoutChange = viewModel::setCattyAgentCommandTimeout,
+            onDismiss = { showCattyAgentConfigDialog = false },
         )
     }
 

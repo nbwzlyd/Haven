@@ -232,6 +232,50 @@ class SettingsViewModel @Inject constructor(
     val mcpAgentEndpointEnabled: StateFlow<Boolean> = preferencesRepository.mcpAgentEndpointEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
 
+    // ---- Catty Agent (outbound AI agent) config ----
+    val cattyAgentApiKey: StateFlow<String> = preferencesRepository.cattyAgentApiKey
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    val cattyAgentBaseUrl: StateFlow<String> = preferencesRepository.cattyAgentBaseUrl
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), sh.haven.core.data.preferences.UserPreferencesRepository.DEFAULT_CATTY_AGENT_BASE_URL)
+
+    val cattyAgentModel: StateFlow<String> = preferencesRepository.cattyAgentModel
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), sh.haven.core.data.preferences.UserPreferencesRepository.DEFAULT_CATTY_AGENT_MODEL)
+
+    val cattyAgentPermissionMode: StateFlow<sh.haven.core.data.preferences.UserPreferencesRepository.CattyAgentPermissionMode> =
+        preferencesRepository.cattyAgentPermissionMode
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), sh.haven.core.data.preferences.UserPreferencesRepository.CattyAgentPermissionMode.CONFIRM)
+
+    val cattyAgentMaxIterations: StateFlow<Int> = preferencesRepository.cattyAgentMaxIterations
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), sh.haven.core.data.preferences.UserPreferencesRepository.DEFAULT_CATTY_AGENT_MAX_ITERATIONS)
+
+    val cattyAgentCommandTimeout: StateFlow<Int> = preferencesRepository.cattyAgentCommandTimeout
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), sh.haven.core.data.preferences.UserPreferencesRepository.DEFAULT_CATTY_AGENT_COMMAND_TIMEOUT)
+
+    fun setCattyAgentApiKey(value: String) {
+        viewModelScope.launch { preferencesRepository.setCattyAgentApiKey(value) }
+    }
+
+    fun setCattyAgentBaseUrl(value: String) {
+        viewModelScope.launch { preferencesRepository.setCattyAgentBaseUrl(value) }
+    }
+
+    fun setCattyAgentModel(value: String) {
+        viewModelScope.launch { preferencesRepository.setCattyAgentModel(value) }
+    }
+
+    fun setCattyAgentPermissionMode(mode: sh.haven.core.data.preferences.UserPreferencesRepository.CattyAgentPermissionMode) {
+        viewModelScope.launch { preferencesRepository.setCattyAgentPermissionMode(mode) }
+    }
+
+    fun setCattyAgentMaxIterations(value: Int) {
+        viewModelScope.launch { preferencesRepository.setCattyAgentMaxIterations(value) }
+    }
+
+    fun setCattyAgentCommandTimeout(value: Int) {
+        viewModelScope.launch { preferencesRepository.setCattyAgentCommandTimeout(value) }
+    }
+
     /** SSH profiles eligible to host the dedicated MCP reverse tunnel. */
     val sshProfiles: StateFlow<List<McpTunnelEndpointOption>> =
         connectionRepository.observeAll()

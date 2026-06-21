@@ -423,4 +423,17 @@
     <string name="settings_paired_clients_unpair_message">It will have to be approved again the next time it connects, and any auto-approval is revoked.</string>
     <string name="settings_paired_clients_unpair_confirm">Un-pair</string>
     <string name="settings_paired_clients_unpaired_toast">Un-paired \'%1$s\'</string>
+
+    <!-- Catty Agent (outbound AI agent) configuration -->
+    <string name="agent_config_section">Catty Agent</string>
+    <string name="agent_config_section_summary">Built-in AI agent that can drive your terminal sessions. Configure an OpenAI-compatible LLM provider to enable.</string>
+    <string name="agent_config_api_key">API Key</string>
+    <string name="agent_config_base_url">Base URL</string>
+    <string name="agent_config_model">Model</string>
+    <string name="agent_config_permission_mode">Permission mode</string>
+    <string name="agent_config_max_iterations">Max iterations per turn</string>
+    <string name="agent_config_command_timeout">Command timeout (seconds)</string>
+    <string name="agent_mode_observer">Observer (read-only)</string>
+    <string name="agent_mode_confirm">Confirm (ask before each command)</string>
+    <string name="agent_mode_autonomous">Autonomous (run without asking)</string>
 </resources>

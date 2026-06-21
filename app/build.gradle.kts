@@ -160,6 +160,7 @@ dependencies {
     implementation(project(":feature:imagetools"))
     implementation(project(":feature:vnc"))
     implementation(project(":feature:rdp"))
+    implementation(project(":feature:agent"))
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

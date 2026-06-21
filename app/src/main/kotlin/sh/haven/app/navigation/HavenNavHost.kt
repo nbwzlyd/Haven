@@ -83,6 +83,7 @@ import sh.haven.feature.sftp.SftpScreen
 import sh.haven.feature.sftp.SftpViewModel
 import androidx.hilt.navigation.compose.hiltViewModel
 import sh.haven.feature.terminal.TerminalScreen
+import sh.haven.feature.agent.ui.AgentChatScreen
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -170,6 +171,10 @@ fun HavenNavHost(
                 // Always shown — Connections is the master list, Settings
                 // hosts the Always-show-all-tabs toggle (discoverability).
                 Screen.Connections, Screen.Settings -> true
+                // The Agent tab is always shown — the user can configure
+                // the LLM provider and ask questions even with no open
+                // sessions (the agent will tell them to connect first).
+                Screen.Agent -> true
                 // Always shown: the Desktop tab is the sole entry point to
                 // the local-desktop install hub (DesktopManagerScreen), which
                 // is useful with no connection at all — same rationale as Sftp
@@ -752,6 +757,20 @@ fun HavenNavHost(
                     }
                 }
                 Screen.Keys -> KeysScreen()
+                Screen.Agent -> {
+                    AgentChatScreen(
+                        onBack = {
+                            coroutineScope.launch {
+                                requestScreen(Screen.Connections)
+                            }
+                        },
+                        onOpenSettings = {
+                            coroutineScope.launch {
+                                requestScreen(Screen.Settings)
+                            }
+                        },
+                    )
+                }
                 Screen.Settings -> {
                     SettingsScreen(
                         openToolbarConfig = openToolbarConfig,

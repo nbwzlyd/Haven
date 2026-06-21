@@ -156,6 +156,26 @@ class UserPreferencesRepository @Inject constructor(
     // survives app restart / re-foreground. Empty/unset preserves the old
     // attach-to-first-live behaviour.
     private val mcpWireguardTunnelConfigIdKey = stringPreferencesKey("mcp_wireguard_tunnel_config_id")
+    // ---- Catty Agent (outbound AI agent — Haven calls an LLM to drive the terminal) ----
+    // API key for the configured LLM provider. Stored in DataStore; for a
+    // production build you'd want this behind the keystore, but DataStore is
+    // consistent with how MCP tunnel profile ids and other secrets are kept.
+    private val cattyAgentApiKeyKey = stringPreferencesKey("catty_agent_api_key")
+    // Base URL of an OpenAI-compatible Chat Completions endpoint. Covers
+    // OpenAI (https://api.openai.com/v1), DeepSeek, Qwen, Zhipu, OpenRouter,
+    // Ollama (http://localhost:11434/v1), and any compatible gateway.
+    private val cattyAgentBaseUrlKey = stringPreferencesKey("catty_agent_base_url")
+    // Model id passed to the provider (e.g. "gpt-4o", "deepseek-chat",
+    // "qwen-plus"). Free-form string — the user picks from the provider's docs.
+    private val cattyAgentModelKey = stringPreferencesKey("catty_agent_model")
+    // Permission mode: "observer" (read-only), "confirm" (per-action approval),
+    // "autonomous" (no per-action approval; blocklist still applies).
+    private val cattyAgentPermissionModeKey = stringPreferencesKey("catty_agent_permission_mode")
+    // Max tool-calling iterations per turn (doom-loop prevention).
+    private val cattyAgentMaxIterationsKey = intPreferencesKey("catty_agent_max_iterations")
+    // Per-command execution timeout in seconds (how long terminal_execute
+    // waits for output before returning what it has).
+    private val cattyAgentCommandTimeoutKey = intPreferencesKey("catty_agent_command_timeout")
 
     val biometricEnabled: Flow<Boolean> = dataStore.data.map { prefs ->
         prefs[biometricEnabledKey] ?: false
@@ -1517,6 +1537,77 @@ class UserPreferencesRepository @Inject constructor(
         }
     }
 
+    // ---- Catty Agent (outbound AI agent) ----
+
+    /** API key for the configured LLM provider. Empty when unset. */
+    val cattyAgentApiKey: Flow<String> = dataStore.data.map { prefs ->
+        prefs[cattyAgentApiKeyKey] ?: ""
+    }
+
+    suspend fun setCattyAgentApiKey(value: String) {
+        dataStore.edit { prefs -> prefs[cattyAgentApiKeyKey] = value }
+    }
+
+    /**
+     * Base URL of an OpenAI-compatible Chat Completions endpoint. Defaults
+     * to OpenAI's public API. Covers DeepSeek, Qwen, Zhipu, OpenRouter,
+     * Ollama, and any compatible gateway.
+     */
+    val cattyAgentBaseUrl: Flow<String> = dataStore.data.map { prefs ->
+        prefs[cattyAgentBaseUrlKey] ?: DEFAULT_CATTY_AGENT_BASE_URL
+    }
+
+    suspend fun setCattyAgentBaseUrl(value: String) {
+        dataStore.edit { prefs -> prefs[cattyAgentBaseUrlKey] = value }
+    }
+
+    /** Model id passed to the provider (e.g. "gpt-4o", "deepseek-chat"). */
+    val cattyAgentModel: Flow<String> = dataStore.data.map { prefs ->
+        prefs[cattyAgentModelKey] ?: DEFAULT_CATTY_AGENT_MODEL
+    }
+
+    suspend fun setCattyAgentModel(value: String) {
+        dataStore.edit { prefs -> prefs[cattyAgentModelKey] = value }
+    }
+
+    /** Permission mode for the agent: observer / confirm / autonomous. */
+    val cattyAgentPermissionMode: Flow<CattyAgentPermissionMode> = dataStore.data.map { prefs ->
+        CattyAgentPermissionMode.fromString(prefs[cattyAgentPermissionModeKey])
+    }
+
+    suspend fun setCattyAgentPermissionMode(mode: CattyAgentPermissionMode) {
+        dataStore.edit { prefs -> prefs[cattyAgentPermissionModeKey] = mode.name }
+    }
+
+    /** Max tool-calling iterations per turn (doom-loop prevention). */
+    val cattyAgentMaxIterations: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[cattyAgentMaxIterationsKey] ?: DEFAULT_CATTY_AGENT_MAX_ITERATIONS
+    }
+
+    suspend fun setCattyAgentMaxIterations(value: Int) {
+        dataStore.edit { prefs -> prefs[cattyAgentMaxIterationsKey] = value.coerceIn(1, 50) }
+    }
+
+    /** Per-command execution timeout in seconds. */
+    val cattyAgentCommandTimeout: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[cattyAgentCommandTimeoutKey] ?: DEFAULT_CATTY_AGENT_COMMAND_TIMEOUT
+    }
+
+    suspend fun setCattyAgentCommandTimeout(value: Int) {
+        dataStore.edit { prefs -> prefs[cattyAgentCommandTimeoutKey] = value.coerceIn(5, 600) }
+    }
+
+    enum class CattyAgentPermissionMode {
+        OBSERVER,
+        CONFIRM,
+        AUTONOMOUS;
+
+        companion object {
+            fun fromString(value: String?): CattyAgentPermissionMode =
+                entries.find { it.name.equals(value, ignoreCase = true) } ?: CONFIRM
+        }
+    }
+
     companion object {
         const val DEFAULT_FONT_SIZE = 14
         const val MIN_FONT_SIZE = 8
@@ -1540,5 +1631,10 @@ class UserPreferencesRepository @Inject constructor(
         const val DEFAULT_TOOLBAR_ROW1 = "keyboard,esc,tab,shift,ctrl,alt" // legacy
         const val DEFAULT_TOOLBAR_ROW2 = "arrow_left,arrow_up,arrow_down,arrow_right,sym_pipe,sym_tilde,sym_slash,sym_backslash,sym_backtick" // legacy
         const val DEFAULT_MEDIA_EXTENSIONS = "mp3 flac ogg opus m4a aac wma wav aiff alac ape mka mp4 mkv avi mov wmv flv webm m4v ts mpg mpeg 3gp"
+        // ---- Catty Agent defaults ----
+        const val DEFAULT_CATTY_AGENT_BASE_URL = "https://api.openai.com/v1"
+        const val DEFAULT_CATTY_AGENT_MODEL = "gpt-4o-mini"
+        const val DEFAULT_CATTY_AGENT_MAX_ITERATIONS = 20
+        const val DEFAULT_CATTY_AGENT_COMMAND_TIMEOUT = 60
     }
 }

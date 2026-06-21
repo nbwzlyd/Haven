@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Agent chat screen -->
+    <string name="agent_title">Catty Agent</string>
+    <string name="agent_subtitle">AI assistant for your terminals</string>
+    <string name="agent_input_hint">Ask Catty to run a command, debug an error…</string>
+    <string name="agent_send">Send</string>
+    <string name="agent_stop">Stop</string>
+    <string name="agent_clear">Clear conversation</string>
+    <string name="agent_empty_title">Catty Agent</string>
+    <string name="agent_empty_subtitle">Ask me to run commands, debug issues, or explain output on your connected terminals.</string>
+    <string name="agent_empty_hint">Open a terminal connection first, then ask me anything.</string>
+
+    <!-- Configuration / settings -->
+    <string name="agent_not_configured">Not configured</string>
+    <string name="agent_not_configured_message">Set up your LLM provider in Settings → Catty Agent to start using the agent.</string>
+    <string name="agent_open_settings">Open Settings</string>
+    <string name="agent_config_api_key">API Key</string>
+    <string name="agent_config_base_url">Base URL</string>
+    <string name="agent_config_model">Model</string>
+    <string name="agent_config_permission_mode">Permission mode</string>
+    <string name="agent_config_max_iterations">Max iterations</string>
+    <string name="agent_config_command_timeout">Command timeout (seconds)</string>
+    <string name="agent_config_section">Catty Agent</string>
+    <string name="agent_config_section_summary">Configure the built-in AI agent that can drive your terminal sessions.</string>
+
+    <!-- Permission modes -->
+    <string name="agent_mode_observer">Observer (read-only)</string>
+    <string name="agent_mode_confirm">Confirm (ask before each command)</string>
+    <string name="agent_mode_autonomous">Autonomous (run without asking)</string>
+
+    <!-- Tool call cards -->
+    <string name="agent_tool_running">Running…</string>
+    <string name="agent_tool_completed">Completed</string>
+    <string name="agent_tool_denied">Denied</string>
+    <string name="agent_tool_pending_approval">Waiting for approval</string>
+    <string name="agent_tool_approve">Approve</string>
+    <string name="agent_tool_deny">Deny</string>
+    <string name="agent_tool_show_result">Show result</string>
+    <string name="agent_tool_hide_result">Hide result</string>
+    <string name="agent_tool_arguments">Arguments</string>
+    <string name="agent_tool_result">Result</string>
+
+    <!-- Errors -->
+    <string name="agent_error_generic">Something went wrong.</string>
+    <string name="agent_error_no_sessions">No terminal sessions are open. Connect to a host first.</string>
+</resources>
