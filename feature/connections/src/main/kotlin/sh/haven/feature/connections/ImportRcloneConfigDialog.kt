@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -64,7 +65,7 @@ fun ImportRcloneConfigDialog(
 
     AlertDialog(
         onDismissRequest = ::close,
-        title = { Text(stringRes(context, R.string.rclone_import_title)) },
+        title = { Text(stringResource(R.string.rclone_import_title)) },
         text = {
             Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                 when (val s = state) {
@@ -73,30 +74,30 @@ fun ImportRcloneConfigDialog(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(Modifier.height(20.dp))
                             Spacer(Modifier.fillMaxWidth(0.05f))
-                            Text(stringRes(context, R.string.rclone_import_title))
+                            Text(stringResource(R.string.rclone_import_title))
                         }
                     is RcloneConfigViewModel.ImportState.Encrypted ->
-                        Text(stringRes(context, R.string.rclone_import_encrypted))
+                        Text(stringResource(R.string.rclone_import_encrypted))
                     is RcloneConfigViewModel.ImportState.Failed ->
                         Text(s.message, color = MaterialTheme.colorScheme.error)
                     is RcloneConfigViewModel.ImportState.Done ->
                         Text(
-                            context.getString(
+                            stringResource(
                                 R.string.rclone_import_done,
                                 s.created.size, s.skipped.size, s.failed.size,
-                            ) + (s.failed.entries.joinToString("") { "\n• ${it.key}: ${it.value}" }),
+                            ) + s.failed.entries.joinToString("") { "\n• ${it.key}: ${it.value}" },
                         )
                     RcloneConfigViewModel.ImportState.Idle -> {
-                        Text(stringRes(context, R.string.rclone_import_intro), style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.rclone_import_intro), style = MaterialTheme.typography.bodySmall)
                         Spacer(Modifier.height(8.dp))
                         OutlinedButton(onClick = { picker.launch("*/*") }) {
-                            Text(stringRes(context, R.string.rclone_import_pick_file))
+                            Text(stringResource(R.string.rclone_import_pick_file))
                         }
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = pasted,
                             onValueChange = { pasted = it },
-                            label = { Text(stringRes(context, R.string.rclone_import_paste_label)) },
+                            label = { Text(stringResource(R.string.rclone_import_paste_label)) },
                             modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp),
                         )
                     }
@@ -104,18 +105,18 @@ fun ImportRcloneConfigDialog(
             }
         },
         confirmButton = {
-            when (val s = state) {
+            when (state) {
                 RcloneConfigViewModel.ImportState.Idle ->
                     TextButton(
                         onClick = { viewModel.loadConfig(pasted) },
                         enabled = pasted.isNotBlank(),
-                    ) { Text(stringRes(context, R.string.rclone_import_parse)) }
+                    ) { Text(stringResource(R.string.rclone_import_parse)) }
                 is RcloneConfigViewModel.ImportState.Done ->
-                    TextButton(onClick = ::close) { Text(stringRes(context, R.string.common_done)) }
+                    TextButton(onClick = ::close) { Text(stringResource(R.string.common_done)) }
                 else -> {}
             }
         },
-        dismissButton = { TextButton(onClick = ::close) { Text(stringRes(context, R.string.common_close)) } },
+        dismissButton = { TextButton(onClick = ::close) { Text(stringResource(R.string.common_close)) } },
     )
 }
 
@@ -124,7 +125,6 @@ private fun SelectRemotes(
     loaded: RcloneConfigViewModel.ImportState.Loaded,
     viewModel: RcloneConfigViewModel,
 ) {
-    val context = LocalContext.current
     // Default-select everything importable (has a type, not already added).
     val checked = remember(loaded) {
         mutableStateMapOf<String, Boolean>().apply {
@@ -136,6 +136,11 @@ private fun SelectRemotes(
             val already = remote.name in loaded.existing
             val noType = remote.type.isBlank()
             val disabled = already || noType
+            val sub = when {
+                already -> "${remote.type} · ${stringResource(R.string.rclone_import_already_added)}"
+                noType -> stringResource(R.string.rclone_import_no_type)
+                else -> remote.type
+            }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Checkbox(
                     checked = checked[remote.name] == true,
@@ -144,11 +149,6 @@ private fun SelectRemotes(
                 )
                 Column(Modifier.padding(start = 4.dp)) {
                     Text(remote.name, style = MaterialTheme.typography.bodyMedium)
-                    val sub = when {
-                        already -> "${remote.type} · ${stringRes(context, R.string.rclone_import_already_added)}"
-                        noType -> stringRes(context, R.string.rclone_import_no_type)
-                        else -> remote.type
-                    }
                     Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -159,9 +159,7 @@ private fun SelectRemotes(
             TextButton(
                 onClick = { viewModel.importRemotes(selected) },
                 enabled = selected.isNotEmpty(),
-            ) { Text(context.getString(R.string.rclone_import_select_count, selected.size)) }
+            ) { Text(stringResource(R.string.rclone_import_select_count, selected.size)) }
         }
     }
 }
-
-private fun stringRes(context: android.content.Context, id: Int): String = context.getString(id)
